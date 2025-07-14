@@ -1,17 +1,23 @@
+# ---------------------
 # Git
+# ---------------------
 .git
 .gitignore
 .gitattributes
 
+# ---------------------
 # IDE and Editor files
+# ---------------------
 .vscode/
-.cursor/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
 
+# ---------------------
 # OS generated files
+# ---------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -20,21 +26,28 @@
 ehthumbs.db
 Thumbs.db
 
-# Development and testing
-*_test.go
-**/*_test.go
-test-*
+# ---------------------
+# Development & Test Files
+# ---------------------
 *.test
+*.out
 coverage.out
 .coverage/
+test-*
+test_output.txt
+test_*.txt
 
+# ---------------------
 # Documentation
-README.md
-LICENSE
-*.md
-!Dockerfile
+# ---------------------
+# You can comment these out if you want to include docs in your image
+#README.md
+#LICENSE
+#*.md
 
-# Build artifacts
+# ---------------------
+# Build Artifacts
+# ---------------------
 *.exe
 *.exe~
 *.dll
@@ -43,37 +56,47 @@ LICENSE
 buddy-mcp
 /buddy-mcp
 
-# Go specific
+# ---------------------
+# Go Modules / Vendor
+# ---------------------
 vendor/
 *.mod.backup
 *.sum.backup
+go.work
 
+# ---------------------
 # Docker
+# ---------------------
 docker-compose.yml
 Dockerfile*
 !Dockerfile
 
-# Logs
+# ---------------------
+# Logs and Temp Files
+# ---------------------
 *.log
 logs/
-
-# Temporary files
 *.tmp
 *.temp
 /tmp/
 
-# Sample data (but keep the structure)
-.buddy/
-!.buddy/
-.buddy/**/*
+# ---------------------
+# Project Specific: .buddy content
+# Keep .buddy structure but not files
+# ---------------------
+.buddy/*
 !.buddy/**/
 !.buddy/**/.gitkeep
 
-# CI/CD
+# ---------------------
+# CI/CD & Meta
+# ---------------------
 .github/
 .travis.yml
 .circleci/
 
-# Other
+# ---------------------
+# JS/Frontend
+# ---------------------
 node_modules/
-*.orig 
+*.orig
