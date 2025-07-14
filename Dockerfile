@@ -16,6 +16,11 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Debug: List contents to verify files were copied
+RUN ls -la /app/
+RUN ls -la /app/cmd/ || echo "cmd directory not found"
+RUN find /app -name "*.go" -type f | head -20
+
 # Build the application
 RUN go build -o /app/buddy-mcp ./cmd/buddy-mcp
 

@@ -1,4 +1,10 @@
 # ---------------------
+# IMPORTANT: Ensure cmd directory is included
+# ---------------------
+!cmd/
+!cmd/**/*.go
+
+# ---------------------
 # Git
 # ---------------------
 .git
@@ -33,9 +39,9 @@ Thumbs.db
 *.out
 coverage.out
 .coverage/
-test-*
 test_output.txt
 test_*.txt
+# Note: We keep test Go files (*_test.go) since they might be needed for build
 
 # ---------------------
 # Documentation
