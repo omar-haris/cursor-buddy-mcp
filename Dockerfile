@@ -17,8 +17,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-WORKDIR /app/cmd/buddy-mcp
-RUN go build -o /app/buddy-mcp .
+RUN go build -o /app/buddy-mcp ./cmd/buddy-mcp
 
 # Runtime stage
 FROM alpine:latest
