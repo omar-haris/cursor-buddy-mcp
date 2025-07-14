@@ -17,7 +17,8 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN go build -o buddy-mcp ./cmd/buddy-mcp
+WORKDIR /app/cmd/buddy-mcp
+RUN go build -o /app/buddy-mcp .
 
 # Runtime stage
 FROM alpine:latest
@@ -38,9 +39,6 @@ COPY --from=builder /app/buddy-mcp /usr/local/bin/buddy-mcp
 # Create default buddy directory structure
 RUN mkdir -p .buddy/{rules,knowledge,todos,database,history,backups} && \
     chown -R buddy:buddy .buddy
-
-# Copy sample content
-COPY --chown=buddy:buddy .buddy/ .buddy/
 
 # Switch to non-root user
 USER buddy
