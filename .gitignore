@@ -59,6 +59,7 @@ data/
 # Search indexes (can be regenerated)
 indexes/
 cmd/buddy-mcp/indexes/
+.buddy/indexes/
 
 # Development scripts (uncomment if you want to exclude them)
 # docker-test-mcp.sh
