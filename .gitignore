@@ -56,13 +56,14 @@ build/
 # Docker volumes
 data/
 
-# Search indexes (can be regenerated)
-indexes/
-cmd/buddy-mcp/indexes/
+# Search indexes (only if you *really* want to ignore them)
+# Uncomment the next line if you want to exclude buddy's auto-generated search data
+# .buddy/indexes/
+# cmd/buddy-mcp/indexes/
 
 # Development scripts (uncomment if you want to exclude them)
 # docker-test-mcp.sh
 # test-mcp-interactive.sh
 
-# Example .buddy content (uncomment if you want to exclude it)
-# .buddy/ 
+# Example .buddy content (uncomment if you want to exclude it entirely)
+# .buddy/

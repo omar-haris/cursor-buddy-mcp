@@ -1,39 +1,129 @@
+<div align="center">
+
 ![MCP Logo](mcp.png)
 
 # Cursor Buddy MCP
 
-**Keep AI Agents Context-Aware & Consistent**
+**🤖 Keep AI Agents Context-Aware & Consistent**
 
-An intelligent MCP server that transforms how AI agents interact with your codebase by providing rich, structured context about your project's rules, knowledge, todos, database schema, and implementation history. No more repetitive explanations or inconsistent responses - your AI assistant becomes a true coding partner that understands your project's standards and conventions.
+[![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker&logoColor=white)](https://github.com/omar-haris/cursor-buddy-mcp/pkgs/container/cursor-buddy-mcp)
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://golang.org/)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-green?logo=github&logoColor=white)](https://modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Why Cursor Buddy MCP?
+*Transform your AI assistant into a context-aware coding partner that understands your project's standards, conventions, and history.*
 
-🎯 **Context-Aware AI**: Your AI assistant instantly knows your coding standards, architectural patterns, and project conventions  
-📚 **Centralized Knowledge**: All project documentation and guidelines in one searchable location  
-✅ **Progress Tracking**: Automatic todo management and implementation history tracking  
-🔄 **Real-time Updates**: File monitoring ensures your AI always has the latest information  
-🚀 **Zero Setup Friction**: Drop-in Docker container with immediate MCP integration  
+[🚀 Quick Start](#-quick-start) • [📚 Documentation](#-documentation) • [🔧 Tools](#-available-tools) • [💡 Examples](#-usage-examples)
 
-## Architecture
+</div>
 
-This server implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) using the Go SDK from [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go). The server communicates over stdin/stdout using JSON-RPC 2.0, making it compatible with MCP clients like Claude Desktop.
+---
 
-### MCP Features Implemented
+## 🎯 Why Cursor Buddy MCP?
 
-- **Tools**: 6 interactive tools for managing project context
-- **Resources**: Project context resource with complete project state
-- **Stdio Transport**: Standard input/output communication
-- **Real-time Updates**: File monitoring with automatic reloading
+<table>
+<tr>
+<td width="50%">
 
-## Quick Start
+### 🧠 **Context-Aware AI**
+Your AI assistant instantly knows your coding standards, architectural patterns, and project conventions
 
-### 1. Pull from GitHub Registry
+### 📚 **Centralized Knowledge**
+All project documentation and guidelines in one searchable location
+
+### ✅ **Progress Tracking**
+Automatic todo management and implementation history tracking
+
+</td>
+<td width="50%">
+
+### 🔄 **Real-time Updates**
+File monitoring ensures your AI always has the latest information
+
+### 🚀 **Zero Setup Friction**
+Drop-in Docker container with immediate MCP integration
+
+### 🔍 **Intelligent Search**
+Fast, relevant results across all your project context
+
+</td>
+</tr>
+</table>
+
+---
+
+## 📋 Table of Contents
+
+- [🎯 Why Cursor Buddy MCP?](#-why-cursor-buddy-mcp)
+- [🏗️ Architecture](#️-architecture)
+- [🚀 Quick Start](#-quick-start)
+- [🔧 Available Tools](#-available-tools)
+- [💡 Usage Examples](#-usage-examples)
+- [📚 Documentation](#-documentation)
+  - [📋 Rules Files](#-rules-files)
+  - [📖 Knowledge Files](#-knowledge-files)
+  - [✅ Todo Files](#-todo-files)
+  - [🗄️ Database Files](#️-database-files)
+- [💎 Best Practices](#-best-practices)
+- [🔧 Advanced Features](#-advanced-features)
+- [🤝 Contributing](#-contributing)
+
+---
+
+## 🏗️ Architecture
+
+<div align="center">
+
+```mermaid
+graph TB
+    A[AI Assistant] --> B[MCP Client]
+    B --> C[Cursor Buddy MCP Server]
+    C --> D[.buddy Directory]
+    D --> E[Rules]
+    D --> F[Knowledge]
+    D --> G[Todos]
+    D --> H[Database]
+    D --> I[History]
+    D --> J[Backups]
+    
+    C --> K[Search Engine]
+    C --> L[File Monitor]
+    C --> M[Backup Manager]
+    
+    style A fill:#e1f5fe
+    style C fill:#f3e5f5
+    style K fill:#e8f5e8
+```
+
+</div>
+
+Built on the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) using the Go SDK from [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go). Communicates over stdin/stdout using JSON-RPC 2.0, making it compatible with MCP clients like Claude Desktop.
+
+### 🎨 Features
+
+| Feature | Description |
+|---------|-------------|
+| **🔧 Tools** | 6 interactive tools for managing project context |
+| **📊 Resources** | Project context resource with complete project state |
+| **🔄 Stdio Transport** | Standard input/output communication |
+| **⚡ Real-time Updates** | File monitoring with automatic reloading |
+| **🔍 Full-text Search** | Bleve-powered search across all content |
+| **💾 Automatic Backups** | Safe file modifications with rollback capability |
+
+---
+
+## 🚀 Quick Start
+
+### 1️⃣ Pull from GitHub Registry
+
 ```bash
 docker pull ghcr.io/omar-haris/cursor-buddy-mcp:latest
 ```
 
-### 2. Configure Cursor
+### 2️⃣ Configure Cursor
+
 Add to `.cursor/mcp.json`:
+
 ```json
 {
   "mcpServers": {
@@ -50,44 +140,99 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### 3. Create .buddy folder
+### 3️⃣ Create .buddy Structure
+
 ```bash
 mkdir -p .buddy/{rules,knowledge,todos,database,history,backups}
 ```
 
-### 4. Add content
-Create files in `.buddy/` folders following the formats below.
+### 4️⃣ Add Your Content
 
-## Available Tools
+Create files in `.buddy/` folders following the [documentation](#-documentation) below.
 
-- **buddy_get_rules** - Get coding standards and guidelines
-- **buddy_search_knowledge** - Search project documentation
-- **buddy_manage_todos** - List/update tasks and track progress
-- **buddy_get_database_info** - Get schema info and validate queries
-- **buddy_history** - Track implementation changes and search history
-- **buddy_backup** - Create and manage file backups
+---
 
-## Usage Examples
+## 🔧 Available Tools
+
+<table>
+<tr>
+<td width="50%">
+
+### 📋 **buddy_get_rules**
+Get coding standards and guidelines
+- Filter by category or priority
+- Support for multiple rule types
+
+### 🔍 **buddy_search_knowledge**
+Search project documentation
+- Full-text search across all knowledge
+- Category and tag filtering
+
+### ✅ **buddy_manage_todos**
+List/update tasks and track progress
+- Feature-based organization
+- Progress tracking and completion
+
+</td>
+<td width="50%">
+
+### 🗄️ **buddy_get_database_info**
+Get schema info and validate queries
+- Table schema information
+- Query validation and examples
+
+### 📚 **buddy_history**
+Track implementation changes and search history
+- Implementation timeline
+- Feature development tracking
+
+### 💾 **buddy_backup**
+Create and manage file backups
+- Automatic backup creation
+- Safe file modifications
+
+</td>
+</tr>
+</table>
+
+---
+
+## 💡 Usage Examples
 
 Ask your AI assistant questions like:
-- "What are our coding standards for error handling?"
-- "Show me current todos for the authentication feature"
-- "Search for API documentation about user endpoints"
-- "What's the database schema for the users table?"
-- "How did we implement JWT authentication last month?"
 
-## How to Write .buddy Files
+<div align="center">
 
-### 📋 Rules Files (`.buddy/rules/`)
+| 🎯 **Category** | 💬 **Example Questions** |
+|----------------|-------------------------|
+| **📋 Coding Standards** | *"What are our coding standards for error handling?"* |
+| **✅ Project Progress** | *"Show me current todos for the authentication feature"* |
+| **📖 Documentation** | *"Search for API documentation about user endpoints"* |
+| **🗄️ Database** | *"What's the database schema for the users table?"* |
+| **📚 History** | *"How did we implement JWT authentication last month?"* |
+| **🔧 Architecture** | *"What design patterns should I use for this feature?"* |
 
-Rules define your project's coding standards, architectural patterns, and guidelines.
+</div>
 
-**Format Requirements:**
-- Use markdown format (`.md`)
-- Include metadata: `category` and `priority`
-- Organize with clear sections and subsections
+---
 
-**Example - Coding Standards** (`.buddy/rules/coding-standards.md`):
+## 📚 Documentation
+
+### 📋 Rules Files
+
+> **Location:** `.buddy/rules/`  
+> **Purpose:** Define coding standards, architectural patterns, and guidelines
+
+#### 📝 Format Requirements
+- ✅ Use markdown format (`.md`)
+- ✅ Include metadata: `category` and `priority`
+- ✅ Organize with clear sections and subsections
+
+#### 🔧 Example: Coding Standards
+
+<details>
+<summary>Click to expand coding standards example</summary>
+
 ```markdown
 # Coding Standards
 - category: coding
@@ -114,7 +259,13 @@ Core coding standards and best practices for the project.
 - Achieve minimum 80% code coverage
 ```
 
-**Example - Architecture Patterns** (`.buddy/rules/architecture-patterns.md`):
+</details>
+
+#### 🏗️ Example: Architecture Patterns
+
+<details>
+<summary>Click to expand architecture patterns example</summary>
+
 ```markdown
 # Architecture Patterns
 - category: architecture
@@ -141,16 +292,25 @@ Core coding standards and best practices for the project.
 └─────────────────────┘
 ```
 
-### 📚 Knowledge Files (`.buddy/knowledge/`)
+</details>
 
-Knowledge files contain project documentation, API specs, and technical information.
+---
 
-**Format Requirements:**
-- Use markdown format (`.md`)
-- Include metadata: `category` and optional `tags`
-- Structure with clear headings and examples
+### 📖 Knowledge Files
 
-**Example - API Documentation** (`.buddy/knowledge/api.md`):
+> **Location:** `.buddy/knowledge/`  
+> **Purpose:** Store project documentation, API specs, and technical information
+
+#### 📝 Format Requirements
+- ✅ Use markdown format (`.md`)
+- ✅ Include metadata: `category` and optional `tags`
+- ✅ Structure with clear headings and examples
+
+#### 🌐 Example: API Documentation
+
+<details>
+<summary>Click to expand API documentation example</summary>
+
 ```markdown
 # API Documentation
 - category: architecture
@@ -203,49 +363,26 @@ All endpoints return errors in this format:
 ```
 ```
 
-**Example - Database Documentation** (`.buddy/knowledge/database.md`):
-```markdown
-# Database Documentation
-- category: database
-- tags: schema, migrations, queries
+</details>
 
-## User Management
+---
 
-### Users Table
-- `id` (PRIMARY KEY) - Auto-incrementing user ID
-- `email` (UNIQUE) - User's email address
-- `password_hash` - Bcrypt hashed password
-- `created_at` - Account creation timestamp
-- `updated_at` - Last update timestamp
+### ✅ Todo Files
 
-### Common Queries
-```sql
--- Get user by email
-SELECT id, email, created_at FROM users WHERE email = $1;
+> **Location:** `.buddy/todos/`  
+> **Purpose:** Track tasks, features, and project progress
 
--- Create new user
-INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id;
+#### 📝 Format Requirements
+- ✅ Use markdown format (`.md`)
+- ✅ Use checkbox syntax: `- [ ]` (incomplete) or `- [x]` (complete)
+- ✅ Group related tasks under clear headings
+- ✅ Include context and details for each task
 
--- Update user info
-UPDATE users SET email = $1, updated_at = NOW() WHERE id = $2;
-```
+#### 🔐 Example: Feature Development
 
-## Indexes
-- `idx_users_email` - Unique index on email for fast lookups
-- `idx_users_created_at` - Index on created_at for reporting queries
-```
+<details>
+<summary>Click to expand feature development example</summary>
 
-### ✅ Todo Files (`.buddy/todos/`)
-
-Todo files track tasks, features, and project progress using markdown checkboxes.
-
-**Format Requirements:**
-- Use markdown format (`.md`)
-- Use checkbox syntax: `- [ ]` (incomplete) or `- [x]` (complete)
-- Group related tasks under clear headings
-- Include context and details for each task
-
-**Example - Feature Development** (`.buddy/todos/authentication.md`):
 ```markdown
 # Authentication Feature
 
@@ -275,33 +412,20 @@ Todo files track tasks, features, and project progress using markdown checkboxes
 - [ ] Load testing for auth endpoints
 ```
 
-**Example - Bug Fixes** (`.buddy/todos/bugs.md`):
-```markdown
-# Bug Fixes
+</details>
 
-## Critical Issues
-- [ ] Fix memory leak in websocket connections
-- [ ] Resolve database connection pool exhaustion
-- [x] Fix CORS issues with API endpoints
+---
 
-## Minor Issues
-- [ ] Update error messages to be more user-friendly
-- [ ] Fix pagination bug in user list
-- [x] Correct timestamp formatting in logs
-- [ ] Update deprecated API endpoints
+### 🗄️ Database Files
 
-## Technical Debt
-- [ ] Refactor legacy authentication code
-- [ ] Update outdated dependencies
-- [ ] Add missing database indexes
-- [ ] Improve test coverage for edge cases
-```
+> **Location:** `.buddy/database/`  
+> **Purpose:** Store SQL schema definitions, migrations, and query examples
 
-### 🗄️ Database Files (`.buddy/database/`)
+#### 📝 Example: Schema Definition
 
-Database files contain SQL schema definitions, migrations, and query examples.
+<details>
+<summary>Click to expand database schema example</summary>
 
-**Example - Schema Definition** (`.buddy/database/schema.sql`):
 ```sql
 -- Users table
 CREATE TABLE users (
@@ -328,25 +452,65 @@ CREATE INDEX idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 ```
 
-## Tips for Better .buddy Files
+</details>
 
-1. **Be Specific**: Include concrete examples and code snippets
-2. **Stay Updated**: Regularly review and update your files
-3. **Use Consistent Formatting**: Follow the same structure across similar files
-4. **Include Context**: Add explanations for why rules or patterns exist
-5. **Link Related Information**: Reference related files or external documentation
-6. **Version Control**: Keep your `.buddy` folder in version control
-7. **Regular Reviews**: Schedule periodic reviews of your rules and knowledge base
+---
 
-## Advanced Features
+## 💎 Best Practices
 
-### File Monitoring
+<div align="center">
+
+| 🎯 **Practice** | 📝 **Description** |
+|----------------|-------------------|
+| **🔍 Be Specific** | Include concrete examples and code snippets |
+| **🔄 Stay Updated** | Regularly review and update your files |
+| **📐 Consistent Formatting** | Follow the same structure across similar files |
+| **💡 Include Context** | Add explanations for why rules or patterns exist |
+| **🔗 Link Information** | Reference related files or external documentation |
+| **📊 Version Control** | Keep your `.buddy` folder in version control |
+| **🔄 Regular Reviews** | Schedule periodic reviews of your knowledge base |
+
+</div>
+
+---
+
+## 🔧 Advanced Features
+
+### 🔍 **File Monitoring**
 The server automatically monitors your `.buddy` directory for changes and reloads content in real-time.
 
-### Search Integration
+### 🔎 **Search Integration**
 Uses Bleve full-text search for fast, relevant results across all your project context.
 
-### Backup Management
+### 💾 **Backup Management**
 Automatically creates backups of important files before modifications.
 
-That's it! Restart Cursor and start asking questions about your project. Your AI assistant will now have deep context about your codebase and can provide consistent, informed responses. 
+### 🏗️ **Extensible Architecture**
+Built with Go for high performance and easy extension with new tools and features.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how you can help:
+
+1. **🐛 Report Issues**: Found a bug? [Open an issue](https://github.com/omar-haris/cursor-buddy-mcp/issues)
+2. **💡 Suggest Features**: Have an idea? [Start a discussion](https://github.com/omar-haris/cursor-buddy-mcp/discussions)
+3. **🔧 Submit PRs**: Ready to code? Fork, develop, and submit a pull request
+4. **📚 Improve Docs**: Help us make the documentation better
+
+---
+
+<div align="center">
+
+## 🎉 Ready to Get Started?
+
+Your AI assistant will now have deep context about your codebase and can provide consistent, informed responses.
+
+**[⬆️ Back to Top](#cursor-buddy-mcp)**
+
+---
+
+*Made with ❤️ by developers, for developers*
+
+</div> 
