@@ -56,6 +56,10 @@ build/
 # Docker volumes
 data/
 
+# Search indexes (can be regenerated)
+indexes/
+cmd/buddy-mcp/indexes/
+
 # Development scripts (uncomment if you want to exclude them)
 # docker-test-mcp.sh
 # test-mcp-interactive.sh
