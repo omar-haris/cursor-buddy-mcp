@@ -1,10 +1,4 @@
 # ---------------------
-# IMPORTANT: Ensure cmd directory is included
-# ---------------------
-!cmd/
-!cmd/**/*.go
-
-# ---------------------
 # Git
 # ---------------------
 .git
@@ -106,3 +100,12 @@ logs/
 # ---------------------
 node_modules/
 *.orig
+
+# ---------------------
+# IMPORTANT: Ensure cmd directory and its contents are included
+# This MUST be at the end to override any previous exclusions
+# ---------------------
+!cmd/
+!cmd/**
+!internal/
+!internal/**
