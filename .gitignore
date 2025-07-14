@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-buddy-mcp
+/buddy-mcp
 
 # Test binary, built with `go test -c`
 *.test
