@@ -1,0 +1,384 @@
+package handlers
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/models"
+)
+
+func TestRulesHandler_Load(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "rules_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test rule file
+	ruleContent := `# Code Style Guidelines
+Category: Development
+Priority: critical
+
+## General Rules
+
+1. Always use meaningful variable names
+2. Error handling is mandatory
+`
+
+	ruleFile := filepath.Join(tempDir, "code-style.md")
+	err = os.WriteFile(ruleFile, []byte(ruleContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test rule file: %v", err)
+	}
+
+	// Test loading rules
+	handler := NewRulesHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load rules: %v", err)
+	}
+
+	rules := handler.GetRules()
+	if len(rules) != 1 {
+		t.Errorf("Expected 1 rule, got %d", len(rules))
+	}
+
+	rule := rules[0]
+	if rule.Title != "Code Style Guidelines" {
+		t.Errorf("Expected title 'Code Style Guidelines', got %s", rule.Title)
+	}
+
+	if rule.Category != "Development" {
+		t.Errorf("Expected category 'Development', got %s", rule.Category)
+	}
+
+	if rule.Priority != "critical" {
+		t.Errorf("Expected priority 'critical', got %s", rule.Priority)
+	}
+}
+
+func TestRulesHandler_GetRulesByCategory(t *testing.T) {
+	handler := NewRulesHandler("")
+
+	// Add test rules
+	handler.rules = []models.Rule{
+		{ID: "1", Category: "Development", Title: "Rule 1"},
+		{ID: "2", Category: "Security", Title: "Rule 2"},
+		{ID: "3", Category: "Development", Title: "Rule 3"},
+	}
+
+	devRules := handler.GetRulesByCategory("Development")
+	if len(devRules) != 2 {
+		t.Errorf("Expected 2 development rules, got %d", len(devRules))
+	}
+
+	secRules := handler.GetRulesByCategory("Security")
+	if len(secRules) != 1 {
+		t.Errorf("Expected 1 security rule, got %d", len(secRules))
+	}
+}
+
+func TestRulesHandler_GetRulesByPriority(t *testing.T) {
+	handler := NewRulesHandler("")
+
+	// Add test rules
+	handler.rules = []models.Rule{
+		{ID: "1", Priority: "critical", Title: "Rule 1"},
+		{ID: "2", Priority: "recommended", Title: "Rule 2"},
+		{ID: "3", Priority: "critical", Title: "Rule 3"},
+	}
+
+	criticalRules := handler.GetRulesByPriority("critical")
+	if len(criticalRules) != 2 {
+		t.Errorf("Expected 2 critical rules, got %d", len(criticalRules))
+	}
+
+	recommendedRules := handler.GetRulesByPriority("recommended")
+	if len(recommendedRules) != 1 {
+		t.Errorf("Expected 1 recommended rule, got %d", len(recommendedRules))
+	}
+}
+
+func TestRulesHandler_GetToolHandler(t *testing.T) {
+	handler := NewRulesHandler("")
+
+	// Add test rules
+	handler.rules = []models.Rule{
+		{ID: "1", Category: "Development", Priority: "critical", Title: "Rule 1", Description: "Test rule 1"},
+		{ID: "2", Category: "Security", Priority: "recommended", Title: "Rule 2", Description: "Test rule 2"},
+	}
+
+	toolHandler := handler.GetToolHandler()
+
+	// Just verify the handler is not nil
+	if toolHandler == nil {
+		t.Fatal("Expected tool handler, got nil")
+	}
+}
+
+// Test the underlying logic that the tool handler uses
+func TestRulesHandler_FilterLogic(t *testing.T) {
+	handler := NewRulesHandler("")
+
+	// Add test rules
+	handler.rules = []models.Rule{
+		{ID: "1", Category: "Development", Priority: "critical", Title: "Rule 1", Description: "Test rule 1"},
+		{ID: "2", Category: "Security", Priority: "recommended", Title: "Rule 2", Description: "Test rule 2"},
+		{ID: "3", Category: "Development", Priority: "recommended", Title: "Rule 3", Description: "Test rule 3"},
+	}
+
+	// Test category filter
+	devRules := handler.GetRulesByCategory("Development")
+	if len(devRules) != 2 {
+		t.Errorf("Expected 2 development rules, got %d", len(devRules))
+	}
+
+	// Test priority filter
+	criticalRules := handler.GetRulesByPriority("critical")
+	if len(criticalRules) != 1 {
+		t.Errorf("Expected 1 critical rule, got %d", len(criticalRules))
+	}
+
+	// Test combined logic (manual filtering)
+	allRules := handler.GetRules()
+	devCriticalRules := []models.Rule{}
+	for _, rule := range allRules {
+		if rule.Category == "Development" && rule.Priority == "critical" {
+			devCriticalRules = append(devCriticalRules, rule)
+		}
+	}
+	if len(devCriticalRules) != 1 {
+		t.Errorf("Expected 1 dev+critical rule, got %d", len(devCriticalRules))
+	}
+}
+
+func TestRulesHandler_LoadNonExistentDirectory(t *testing.T) {
+	handler := NewRulesHandler("/non/existent/path")
+	err := handler.Load()
+
+	// Should not error when directory doesn't exist
+	if err != nil {
+		t.Errorf("Expected no error for non-existent directory, got: %v", err)
+	}
+
+	rules := handler.GetRules()
+	if len(rules) != 0 {
+		t.Errorf("Expected 0 rules for non-existent directory, got %d", len(rules))
+	}
+}
+
+func TestRulesHandler_LoadInvalidFile(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "rules_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create invalid file (not markdown)
+	invalidFile := filepath.Join(tempDir, "invalid.txt")
+	err = os.WriteFile(invalidFile, []byte("invalid content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid file: %v", err)
+	}
+
+	// Test loading rules - should skip invalid files
+	handler := NewRulesHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load rules: %v", err)
+	}
+
+	rules := handler.GetRules()
+	if len(rules) != 0 {
+		t.Errorf("Expected 0 rules (invalid file should be skipped), got %d", len(rules))
+	}
+}
+
+func TestRulesHandler_ConcurrentAccess(t *testing.T) {
+	handler := NewRulesHandler("")
+
+	// Add test rules
+	handler.rules = []models.Rule{
+		{ID: "1", Category: "Development", Title: "Rule 1"},
+	}
+
+	// Test concurrent read access
+	done := make(chan bool, 2)
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			rules := handler.GetRules()
+			if len(rules) != 1 {
+				t.Errorf("Concurrent read failed: expected 1 rule, got %d", len(rules))
+			}
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			rules := handler.GetRulesByCategory("Development")
+			if len(rules) != 1 {
+				t.Errorf("Concurrent category read failed: expected 1 rule, got %d", len(rules))
+			}
+		}
+		done <- true
+	}()
+
+	// Wait for both goroutines to complete
+	<-done
+	<-done
+}
+
+func TestRulesHandler_GetToolHandlerComprehensive(t *testing.T) {
+	// Create a temporary directory
+	tempDir, err := os.MkdirTemp("", "rules_tool_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a handler with test data
+	handler := &RulesHandler{
+		path: tempDir,
+		rules: []models.Rule{
+			{
+				ID:          "test-rule-1",
+				Title:       "Use camelCase for variable names",
+				Category:    "naming",
+				Description: "All variables must use camelCase naming convention",
+				Priority:    "recommended",
+				Content:     "Details about the camelCase naming convention...",
+			},
+			{
+				ID:          "test-rule-2",
+				Title:       "No global variables",
+				Category:    "architecture",
+				Description: "Avoid using global variables",
+				Priority:    "critical",
+				Content:     "Global variables can cause unexpected side effects...",
+			},
+			{
+				ID:          "test-rule-3",
+				Title:       "Document public APIs",
+				Category:    "documentation",
+				Description: "All public APIs should have documentation",
+				Priority:    "optional",
+				Content:     "Good documentation helps other developers...",
+			},
+		},
+	}
+
+	// Get the tool handler
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected non-nil tool handler")
+	}
+
+	// Create test context
+	ctx := context.Background()
+
+	// Test with no arguments (should return all rules)
+	baseRequest := mcp.CallToolRequest{}
+
+	baseResult, err := toolHandler(ctx, baseRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for base request: %v", err)
+	}
+	if baseResult == nil {
+		t.Fatal("Expected non-nil result for base request")
+	}
+
+	// Test with category parameter
+	categoryRequest := mcp.CallToolRequest{}
+	categoryRequest.Params.Arguments = map[string]interface{}{
+		"category": "naming",
+	}
+
+	categoryResult, err := toolHandler(ctx, categoryRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for category request: %v", err)
+	}
+	if categoryResult == nil {
+		t.Fatal("Expected non-nil result for category request")
+	}
+
+	// Test with priority parameter
+	priorityRequest := mcp.CallToolRequest{}
+	priorityRequest.Params.Arguments = map[string]interface{}{
+		"priority": "critical",
+	}
+
+	priorityResult, err := toolHandler(ctx, priorityRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for priority request: %v", err)
+	}
+	if priorityResult == nil {
+		t.Fatal("Expected non-nil result for priority request")
+	}
+
+	// Test with both category and priority parameters
+	combinedRequest := mcp.CallToolRequest{}
+	combinedRequest.Params.Arguments = map[string]interface{}{
+		"category": "architecture",
+		"priority": "critical",
+	}
+
+	combinedResult, err := toolHandler(ctx, combinedRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for combined request: %v", err)
+	}
+	if combinedResult == nil {
+		t.Fatal("Expected non-nil result for combined request")
+	}
+
+	// Test with non-existent category
+	nonExistentCategoryRequest := mcp.CallToolRequest{}
+	nonExistentCategoryRequest.Params.Arguments = map[string]interface{}{
+		"category": "non_existent",
+	}
+
+	nonExistentCategoryResult, err := toolHandler(ctx, nonExistentCategoryRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for non-existent category: %v", err)
+	}
+	if nonExistentCategoryResult == nil {
+		t.Fatal("Expected non-nil result for non-existent category")
+	}
+
+	// Test with non-existent priority
+	nonExistentPriorityRequest := mcp.CallToolRequest{}
+	nonExistentPriorityRequest.Params.Arguments = map[string]interface{}{
+		"priority": "non_existent",
+	}
+
+	nonExistentPriorityResult, err := toolHandler(ctx, nonExistentPriorityRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for non-existent priority: %v", err)
+	}
+	if nonExistentPriorityResult == nil {
+		t.Fatal("Expected non-nil result for non-existent priority")
+	}
+
+	// Test with empty rules collection
+	emptyHandler := &RulesHandler{
+		path:  tempDir,
+		rules: []models.Rule{},
+	}
+
+	emptyToolHandler := emptyHandler.GetToolHandler()
+	emptyRequest := mcp.CallToolRequest{}
+
+	emptyResult, err := emptyToolHandler(ctx, emptyRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for empty rules: %v", err)
+	}
+	if emptyResult == nil {
+		t.Fatal("Expected non-nil result for empty rules")
+	}
+}

@@ -1,0 +1,2 @@
+# This file ensures the backups directory is preserved in git repositories
+# even when it's empty 

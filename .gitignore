@@ -1,0 +1,64 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+buddy-mcp
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+coverage_*.html
+*_coverage.html
+*_coverage.out
+
+# Test output files
+test_output.txt
+test_*.txt
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE specific files
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build directories
+dist/
+build/
+
+# Docker volumes
+data/
+
+# Development scripts (uncomment if you want to exclude them)
+# docker-test-mcp.sh
+# test-mcp-interactive.sh
+
+# Example .buddy content (uncomment if you want to exclude it)
+# .buddy/ 

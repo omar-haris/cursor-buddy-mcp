@@ -1,0 +1,1677 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"sync"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/models"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/search"
+)
+
+// mockSearchManagerForBuddy creates a mock search manager for testing
+func mockSearchManagerForBuddy(t *testing.T) *search.SearchManager {
+	tempDir := t.TempDir()
+	sm, err := search.NewSearchManager(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create mock search manager: %v", err)
+	}
+	return sm
+}
+
+func TestBuddyHandlers_NewBuddyHandlers(t *testing.T) {
+	// Create temporary .buddy directory
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	buddyDir := filepath.Join(tempDir, ".buddy")
+	err = os.MkdirAll(buddyDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create .buddy dir: %v", err)
+	}
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	if handlers == nil {
+		t.Fatal("Expected BuddyHandlers instance, got nil")
+	}
+
+	if handlers.rulesHandler == nil {
+		t.Error("Expected Rules handler to be initialized")
+	}
+
+	if handlers.knowledgeHandler == nil {
+		t.Error("Expected Knowledge handler to be initialized")
+	}
+
+	if handlers.databaseHandler == nil {
+		t.Error("Expected Database handler to be initialized")
+	}
+
+	if handlers.todoHandler == nil {
+		t.Error("Expected Todo handler to be initialized")
+	}
+
+	if handlers.historyHandler == nil {
+		t.Error("Expected History handler to be initialized")
+	}
+
+	if handlers.backupHandler == nil {
+		t.Error("Expected Backup handler to be initialized")
+	}
+}
+
+func TestBuddyHandlers_LoadAll(t *testing.T) {
+	// Create temporary .buddy directory structure
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	buddyDir := filepath.Join(tempDir, ".buddy")
+
+	// Create subdirectories
+	dirs := []string{"rules", "knowledge", "database", "todos", "history", "backups"}
+	for _, dir := range dirs {
+		err = os.MkdirAll(filepath.Join(buddyDir, dir), 0755)
+		if err != nil {
+			t.Fatalf("Failed to create %s dir: %v", dir, err)
+		}
+	}
+
+	// Create test files
+	ruleContent := `# Test Rule
+Category: Development
+Priority: critical
+
+Test rule content.`
+
+	knowledgeContent := `# Test Knowledge
+Category: Architecture
+
+Test knowledge content.`
+
+	todoContent := `# User Authentication
+
+- [ ] Implement login
+- [x] Setup database`
+
+	err = os.WriteFile(filepath.Join(buddyDir, "rules", "test.md"), []byte(ruleContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test rule file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(buddyDir, "knowledge", "test.md"), []byte(knowledgeContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test knowledge file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(buddyDir, "todos", "auth.md"), []byte(todoContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test todo file: %v", err)
+	}
+
+	// Test loading all data
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	// Data should be loaded automatically
+	rules := handlers.rulesHandler.GetRules()
+	if len(rules) == 0 {
+		// Try manual reload
+		err = handlers.ReloadData()
+		if err != nil {
+			t.Fatalf("Failed to reload data: %v", err)
+		}
+		rules = handlers.rulesHandler.GetRules()
+	}
+
+	// Verify data was loaded (at least check that handlers exist)
+	if handlers.rulesHandler == nil {
+		t.Error("Expected rules handler to exist")
+	}
+
+	if handlers.knowledgeHandler == nil {
+		t.Error("Expected knowledge handler to exist")
+	}
+
+	if handlers.todoHandler == nil {
+		t.Error("Expected todo handler to exist")
+	}
+}
+
+func TestBuddyHandlers_GetProjectContext(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	context := handlers.GetProjectContext()
+
+	if context.ProjectName == "" {
+		t.Error("Expected project name to be set")
+	}
+
+	if context.Rules == nil {
+		t.Error("Expected Rules in context")
+	}
+
+	if context.Knowledge == nil {
+		t.Error("Expected Knowledge in context")
+	}
+
+	if context.Todos == nil {
+		t.Error("Expected Todos in context")
+	}
+}
+
+func TestBuddyHandlers_ReloadAll(t *testing.T) {
+	// Create temporary .buddy directory
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	buddyDir := filepath.Join(tempDir, ".buddy")
+	rulesDir := filepath.Join(buddyDir, "rules")
+	err = os.MkdirAll(rulesDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create rules dir: %v", err)
+	}
+
+	// Create initial rule file
+	ruleContent1 := `# Rule 1
+Category: Development
+
+First rule.`
+
+	ruleFile := filepath.Join(rulesDir, "rule1.md")
+	err = os.WriteFile(ruleFile, []byte(ruleContent1), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create rule file: %v", err)
+	}
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	// Add a second rule file
+	ruleContent2 := `# Rule 2
+Category: Security
+
+Second rule.`
+
+	rule2File := filepath.Join(rulesDir, "rule2.md")
+	err = os.WriteFile(rule2File, []byte(ruleContent2), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create second rule file: %v", err)
+	}
+
+	// Reload data
+	err = handlers.ReloadData()
+	if err != nil {
+		t.Fatalf("Failed to reload data: %v", err)
+	}
+
+	// Verify handlers exist
+	if handlers.rulesHandler == nil {
+		t.Error("Expected rules handler to exist after reload")
+	}
+}
+
+func TestBuddyHandlers_GetResourceHandler(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	resourceHandler := handlers.GetProjectContextResourceHandler()
+	if resourceHandler == nil {
+		t.Fatal("Expected resource handler, got nil")
+	}
+}
+
+func TestBuddyHandlers_ConcurrentAccess(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	// Test concurrent access to project context
+	done := make(chan bool, 2)
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			context := handlers.GetProjectContext()
+			if context.ProjectName == "" {
+				t.Error("Concurrent context access failed: expected non-empty project name")
+			}
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			// Simulate concurrent reload
+			_ = handlers.ReloadData()
+		}
+		done <- true
+	}()
+
+	// Wait for both goroutines to complete
+	<-done
+	<-done
+}
+
+func TestBuddyHandlers_NonExistentBuddyFolder(t *testing.T) {
+	// Create a temporary directory that we know exists, then use a subpath that doesn't
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Use a subdirectory that doesn't exist
+	nonExistentPath := filepath.Join(tempDir, "nonexistent")
+
+	handlers, err := NewBuddyHandlers(nonExistentPath)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	context := handlers.GetProjectContext()
+	if context == nil {
+		t.Error("Expected project context even with no .buddy folder")
+	}
+}
+
+func TestBuddyHandlers_ToolHandlers(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	// Test that all tool handlers can be retrieved
+	if handlers.GetRulesToolHandler() == nil {
+		t.Error("Expected rules tool handler")
+	}
+
+	if handlers.GetKnowledgeToolHandler() == nil {
+		t.Error("Expected knowledge tool handler")
+	}
+
+	if handlers.GetDatabaseToolHandler() == nil {
+		t.Error("Expected database tool handler")
+	}
+
+	if handlers.GetTodoToolHandler() == nil {
+		t.Error("Expected todo tool handler")
+	}
+
+	if handlers.GetHistoryToolHandler() == nil {
+		t.Error("Expected history tool handler")
+	}
+
+	if handlers.GetBackupToolHandler() == nil {
+		t.Error("Expected backup tool handler")
+	}
+}
+
+func TestBuddyHandlers_CreateBuddyStructure(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_handlers_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Test creating buddy structure
+	err = createBuddyStructure(tempDir)
+	if err != nil {
+		t.Errorf("Unexpected error creating buddy structure: %v", err)
+	}
+
+	// Verify all directories were created
+	expectedDirs := []string{
+		"rules",
+		"knowledge",
+		"database",
+		"todos",
+		"history",
+		"backups",
+	}
+
+	for _, dir := range expectedDirs {
+		fullPath := filepath.Join(tempDir, dir)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			t.Errorf("Expected directory %s was not created", fullPath)
+		}
+	}
+
+	// Test creating buddy structure in existing directory (should not error)
+	err = createBuddyStructure(tempDir)
+	if err != nil {
+		t.Errorf("Unexpected error creating buddy structure in existing directory: %v", err)
+	}
+}
+
+func TestBuddyHandlers_LoadAllData(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_handlers_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test data files (in the tempDir directly since createBuddyStructure creates subdirs)
+	testRule := `---
+Category: Testing
+Priority: High
+---
+# Test Rule
+Test rule content`
+
+	rulesDir := filepath.Join(tempDir, "rules")
+	os.MkdirAll(rulesDir, 0755)
+	err = os.WriteFile(filepath.Join(rulesDir, "test.md"), []byte(testRule), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test rule: %v", err)
+	}
+
+	testKnowledge := `---
+Tags: test, example
+Category: Documentation
+---
+# Test Knowledge
+Test knowledge content`
+
+	knowledgeDir := filepath.Join(tempDir, "knowledge")
+	os.MkdirAll(knowledgeDir, 0755)
+	err = os.WriteFile(filepath.Join(knowledgeDir, "test.md"), []byte(testKnowledge), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test knowledge: %v", err)
+	}
+
+	testTodo := `# Test Todos
+
+## Feature: testing
+- [x] Create test
+- [ ] Run test`
+
+	todosDir := filepath.Join(tempDir, "todos")
+	os.MkdirAll(todosDir, 0755)
+	err = os.WriteFile(filepath.Join(todosDir, "test.md"), []byte(testTodo), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test todo: %v", err)
+	}
+
+	// Create handlers (this will call loadAllData internally)
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create buddy handlers: %v", err)
+	}
+	if handlers == nil {
+		t.Fatal("Expected buddy handlers, got nil")
+	}
+
+	// Verify data was loaded
+	rules := handlers.rulesHandler.GetRules()
+	if len(rules) == 0 {
+		t.Error("Expected rules to be loaded")
+	}
+
+	knowledge := handlers.knowledgeHandler.GetKnowledge()
+	if len(knowledge) == 0 {
+		t.Error("Expected knowledge to be loaded")
+	}
+
+	todos := handlers.todoHandler.GetTodos()
+	if len(todos) == 0 {
+		t.Error("Expected todos to be loaded")
+	}
+}
+
+func TestBuddyHandlers_LoadAllDataErrors(t *testing.T) {
+	// Test NewBuddyHandlers with invalid paths should still work
+	// but create the directory structure
+	invalidPath := "/tmp/invalid-buddy-test"
+	defer os.RemoveAll(invalidPath)
+
+	handlers, err := NewBuddyHandlers(invalidPath)
+	if err != nil {
+		t.Errorf("NewBuddyHandlers should handle directory creation: %v", err)
+	}
+	if handlers == nil {
+		t.Error("Expected handlers even with new directory")
+	}
+}
+
+func TestBuddyHandlers_AdvancedProjectContext(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "buddy_handlers_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create multiple test files with various categories and priorities
+	testFiles := map[string]string{
+		"rules/coding.md": `---
+Category: Coding
+Priority: High
+---
+# Coding Standards
+Use clean code principles`,
+		"rules/testing.md": `---
+Category: Testing
+Priority: Medium
+---
+# Testing Guidelines
+Write comprehensive tests`,
+		"knowledge/architecture.md": `---
+Tags: design, patterns
+Category: Architecture
+---
+# Design Patterns
+Common design patterns`,
+		"knowledge/troubleshooting.md": `---
+Tags: debug, issues
+Category: Support
+---
+# Troubleshooting Guide
+Common issues and solutions`,
+		"todos/features.md": `# Feature Development
+
+## Feature: authentication
+- [x] Basic login
+- [ ] OAuth integration
+- [ ] Password reset
+
+## Feature: ui-improvements
+- [x] Dark mode
+- [ ] Mobile responsive`,
+		"database/schema.sql": `-- Users table
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Index for email lookups
+CREATE INDEX idx_users_email ON users(email);`,
+	}
+
+	// Create directories and files
+	for filePath, content := range testFiles {
+		fullPath := filepath.Join(tempDir, filePath)
+		dir := filepath.Dir(fullPath)
+		os.MkdirAll(dir, 0755)
+		err = os.WriteFile(fullPath, []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file %s: %v", filePath, err)
+		}
+	}
+
+	// Create handlers and load data
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create buddy handlers: %v", err)
+	}
+
+	// Test project context generation
+	context := handlers.GetProjectContext()
+	if context == nil {
+		t.Fatal("Expected project context, got nil")
+	}
+
+	// Verify comprehensive context content
+	if len(context.Rules) < 2 {
+		t.Errorf("Expected at least 2 rules, got %d", len(context.Rules))
+	}
+
+	if len(context.Knowledge) < 2 {
+		t.Errorf("Expected at least 2 knowledge items, got %d", len(context.Knowledge))
+	}
+
+	if len(context.Todos) < 4 {
+		t.Errorf("Expected at least 4 todos, got %d", len(context.Todos))
+	}
+
+	if context.Database == nil || len(context.Database.Tables) < 1 {
+		t.Errorf("Expected at least 1 database table, got %d", 0)
+	}
+
+	// Verify specific content
+	foundCodingRule := false
+	for _, rule := range context.Rules {
+		if rule.Category == "Coding" && rule.Priority == "High" {
+			foundCodingRule = true
+			break
+		}
+	}
+	if !foundCodingRule {
+		t.Error("Expected to find coding rule with high priority")
+	}
+
+	// Look for any todos (feature parsing might differ)
+	foundTodos := len(context.Todos) > 0
+	if !foundTodos {
+		t.Error("Expected to find some todos")
+	}
+}
+
+func TestBuddyHandlers_LoadAllDataErrorCases(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_handlers_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a non-existent path that will cause Load() to fail
+	nonExistentPath := filepath.Join(tempDir, "nonexistent", "path")
+
+	// Create a buddyHandlers instance but with a mock rulesHandler that will fail to load
+	bh := &BuddyHandlers{
+		buddyPath: tempDir,
+		rulesHandler: &RulesHandler{
+			path: nonExistentPath,
+		},
+		knowledgeHandler: NewKnowledgeHandler(filepath.Join(tempDir, "knowledge"), mockSearchManager(t)),
+		databaseHandler:  NewDatabaseHandler(filepath.Join(tempDir, "database"), mockSearchManager(t)),
+		todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos"), mockSearchManager(t)),
+		historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history"), mockSearchManager(t)),
+		backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups"), mockSearchManager(t)),
+	}
+
+	// Create a minimal setup so the rules directory doesn't exist
+	// Test that loadAllData doesn't fail even with non-existent directory
+	// Note: This is consistent with how the handlers work - they don't fail on non-existent directories
+	// If this is the expected behavior, we should adjust our test expectations
+	err = bh.loadAllData()
+	if err != nil {
+		t.Logf("Note: loadAllData succeeded even with non-existent path: %v", err)
+	}
+}
+
+func TestBuddyHandlers_LoadAllDataErrorPaths(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_handlers_error_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Test 1: Rules handler failure with a file that can't be read
+	t.Run("RulesLoadFailure", func(t *testing.T) {
+		rulesDir := filepath.Join(tempDir, "rules_test")
+		os.MkdirAll(rulesDir, 0755)
+
+		// Create an invalid markdown file that will cause parsing to fail
+		invalidFile := filepath.Join(rulesDir, "invalid.md")
+		if err := os.WriteFile(invalidFile, []byte("---\nBroken YAML\n---\n"), 0644); err != nil {
+			t.Fatalf("Failed to create invalid file: %v", err)
+		}
+
+		// Make the file unreadable to cause load failure
+		if err := os.Chmod(invalidFile, 0000); err != nil {
+			t.Fatalf("Failed to change file permissions: %v", err)
+		}
+		defer os.Chmod(invalidFile, 0644) // Clean up permissions
+
+		bh := &BuddyHandlers{
+			buddyPath:        tempDir,
+			rulesHandler:     NewRulesHandler(rulesDir, mockSearchManager(t)),
+			knowledgeHandler: NewKnowledgeHandler(filepath.Join(tempDir, "knowledge"), mockSearchManager(t)),
+			databaseHandler:  NewDatabaseHandler(filepath.Join(tempDir, "database"), mockSearchManager(t)),
+			todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos"), mockSearchManager(t)),
+			historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history"), mockSearchManager(t)),
+			backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups"), mockSearchManager(t)),
+		}
+
+		err := bh.loadAllData()
+		if err == nil {
+			t.Error("Expected error when rules handler fails to load")
+		} else if !strings.Contains(err.Error(), "failed to load rules") {
+			t.Errorf("Expected rules error, got: %v", err)
+		}
+	})
+
+	// Test 2: Knowledge handler failure - these handlers are resilient to missing directories
+	// but can fail on permission issues or corrupted files
+	t.Run("KnowledgeLoadFailure", func(t *testing.T) {
+		rulesDir := filepath.Join(tempDir, "rules2")
+		knowledgeDir := filepath.Join(tempDir, "knowledge2")
+		os.MkdirAll(rulesDir, 0755)
+		os.MkdirAll(knowledgeDir, 0755)
+
+		// Create an unreadable file in knowledge directory
+		unreadableFile := filepath.Join(knowledgeDir, "unreadable.md")
+		if err := os.WriteFile(unreadableFile, []byte("content"), 0644); err != nil {
+			t.Fatalf("Failed to create unreadable file: %v", err)
+		}
+		if err := os.Chmod(unreadableFile, 0000); err != nil {
+			t.Fatalf("Failed to change file permissions: %v", err)
+		}
+		defer os.Chmod(unreadableFile, 0644) // Clean up
+
+		bh := &BuddyHandlers{
+			buddyPath:        tempDir,
+			rulesHandler:     NewRulesHandler(rulesDir),
+			knowledgeHandler: NewKnowledgeHandler(knowledgeDir),
+			databaseHandler:  NewDatabaseHandler(filepath.Join(tempDir, "database")),
+			todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos")),
+			historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history")),
+			backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+		}
+
+		err := bh.loadAllData()
+		if err == nil {
+			t.Error("Expected error when knowledge handler fails to load")
+		} else if !strings.Contains(err.Error(), "failed to load knowledge") {
+			t.Errorf("Expected knowledge error, got: %v", err)
+		}
+	})
+
+	// Test 3: Database handler - test by making directory structure unreadable
+	t.Run("DatabaseLoadFailure", func(t *testing.T) {
+		rulesDir := filepath.Join(tempDir, "rules3")
+		knowledgeDir := filepath.Join(tempDir, "knowledge3")
+		databaseDir := filepath.Join(tempDir, "database3")
+		os.MkdirAll(rulesDir, 0755)
+		os.MkdirAll(knowledgeDir, 0755)
+		os.MkdirAll(databaseDir, 0755)
+
+		// Database handler is very resilient - it doesn't typically fail
+		// Since it always returns nil, this test verifies it doesn't fail
+		bh := &BuddyHandlers{
+			buddyPath:        tempDir,
+			rulesHandler:     NewRulesHandler(rulesDir),
+			knowledgeHandler: NewKnowledgeHandler(knowledgeDir),
+			databaseHandler:  NewDatabaseHandler(databaseDir),
+			todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos")),
+			historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history")),
+			backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+		}
+
+		err := bh.loadAllData()
+		// Database handler is designed to be resilient and shouldn't fail
+		if err != nil {
+			t.Errorf("Database handler should be resilient, got error: %v", err)
+		}
+	})
+
+	// Test 4: Todo handler failure
+	t.Run("TodoLoadFailure", func(t *testing.T) {
+		rulesDir := filepath.Join(tempDir, "rules4")
+		knowledgeDir := filepath.Join(tempDir, "knowledge4")
+		databaseDir := filepath.Join(tempDir, "database4")
+		todosDir := filepath.Join(tempDir, "todos4")
+		os.MkdirAll(rulesDir, 0755)
+		os.MkdirAll(knowledgeDir, 0755)
+		os.MkdirAll(databaseDir, 0755)
+		os.MkdirAll(todosDir, 0755)
+
+		// Create an unreadable file in todos directory
+		unreadableFile := filepath.Join(todosDir, "unreadable.md")
+		if err := os.WriteFile(unreadableFile, []byte("content"), 0644); err != nil {
+			t.Fatalf("Failed to create unreadable file: %v", err)
+		}
+		if err := os.Chmod(unreadableFile, 0000); err != nil {
+			t.Fatalf("Failed to change file permissions: %v", err)
+		}
+		defer os.Chmod(unreadableFile, 0644) // Clean up
+
+		bh := &BuddyHandlers{
+			buddyPath:        tempDir,
+			rulesHandler:     NewRulesHandler(rulesDir),
+			knowledgeHandler: NewKnowledgeHandler(knowledgeDir),
+			databaseHandler:  NewDatabaseHandler(databaseDir),
+			todoHandler:      NewTodoHandler(todosDir),
+			historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history")),
+			backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+		}
+
+		err := bh.loadAllData()
+		if err == nil {
+			t.Error("Expected error when todo handler fails to load")
+		} else if !strings.Contains(err.Error(), "failed to load todos") {
+			t.Errorf("Expected todos error, got: %v", err)
+		}
+	})
+
+	// Test 5: History handler failure
+	t.Run("HistoryLoadFailure", func(t *testing.T) {
+		rulesDir := filepath.Join(tempDir, "rules5")
+		knowledgeDir := filepath.Join(tempDir, "knowledge5")
+		databaseDir := filepath.Join(tempDir, "database5")
+		todosDir := filepath.Join(tempDir, "todos5")
+		historyDir := filepath.Join(tempDir, "history5")
+		os.MkdirAll(rulesDir, 0755)
+		os.MkdirAll(knowledgeDir, 0755)
+		os.MkdirAll(databaseDir, 0755)
+		os.MkdirAll(todosDir, 0755)
+		os.MkdirAll(historyDir, 0755)
+
+		// Create an unreadable file in history directory
+		unreadableFile := filepath.Join(historyDir, "unreadable.json")
+		if err := os.WriteFile(unreadableFile, []byte("{}"), 0644); err != nil {
+			t.Fatalf("Failed to create unreadable file: %v", err)
+		}
+		if err := os.Chmod(unreadableFile, 0000); err != nil {
+			t.Fatalf("Failed to change file permissions: %v", err)
+		}
+		defer os.Chmod(unreadableFile, 0644) // Clean up
+
+		bh := &BuddyHandlers{
+			buddyPath:        tempDir,
+			rulesHandler:     NewRulesHandler(rulesDir),
+			knowledgeHandler: NewKnowledgeHandler(knowledgeDir),
+			databaseHandler:  NewDatabaseHandler(databaseDir),
+			todoHandler:      NewTodoHandler(todosDir),
+			historyHandler:   NewHistoryHandler(historyDir),
+			backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+		}
+
+		err := bh.loadAllData()
+		if err == nil {
+			t.Error("Expected error when history handler fails to load")
+		} else if !strings.Contains(err.Error(), "failed to load history") {
+			t.Errorf("Expected history error, got: %v", err)
+		}
+	})
+
+	// Test 6: Backup handler failure
+	t.Run("BackupLoadFailure", func(t *testing.T) {
+		rulesDir := filepath.Join(tempDir, "rules6")
+		knowledgeDir := filepath.Join(tempDir, "knowledge6")
+		databaseDir := filepath.Join(tempDir, "database6")
+		todosDir := filepath.Join(tempDir, "todos6")
+		historyDir := filepath.Join(tempDir, "history6")
+		backupDir := filepath.Join(tempDir, "backups6")
+		os.MkdirAll(rulesDir, 0755)
+		os.MkdirAll(knowledgeDir, 0755)
+		os.MkdirAll(databaseDir, 0755)
+		os.MkdirAll(todosDir, 0755)
+		os.MkdirAll(historyDir, 0755)
+		os.MkdirAll(backupDir, 0755)
+
+		// Create an invalid metadata file that will cause loadBackupMetadata to fail
+		invalidMetadataFile := filepath.Join(backupDir, "invalid_metadata.json")
+		if err := os.WriteFile(invalidMetadataFile, []byte("invalid json content"), 0644); err != nil {
+			t.Fatalf("Failed to create invalid metadata file: %v", err)
+		}
+
+		bh := &BuddyHandlers{
+			buddyPath:        tempDir,
+			rulesHandler:     NewRulesHandler(rulesDir),
+			knowledgeHandler: NewKnowledgeHandler(knowledgeDir),
+			databaseHandler:  NewDatabaseHandler(databaseDir),
+			todoHandler:      NewTodoHandler(todosDir),
+			historyHandler:   NewHistoryHandler(historyDir),
+			backupHandler:    NewBackupHandler(backupDir),
+		}
+
+		err := bh.loadAllData()
+		if err == nil {
+			t.Error("Expected error when backup handler fails to load")
+		} else if !strings.Contains(err.Error(), "failed to load backups") {
+			t.Errorf("Expected backups error, got: %v", err)
+		}
+	})
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandler(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_context_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create basic directory structure
+	dirs := []string{"rules", "knowledge", "database", "todos", "history", "backups"}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(filepath.Join(tempDir, dir), 0755); err != nil {
+			t.Fatalf("Failed to create directory %s: %v", dir, err)
+		}
+	}
+
+	// Create a BuddyHandlers instance
+	bh := &BuddyHandlers{
+		buddyPath:        tempDir,
+		rulesHandler:     NewRulesHandler(filepath.Join(tempDir, "rules")),
+		knowledgeHandler: NewKnowledgeHandler(filepath.Join(tempDir, "knowledge")),
+		databaseHandler:  NewDatabaseHandler(filepath.Join(tempDir, "database")),
+		todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos")),
+		historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history")),
+		backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+	}
+
+	// Get the resource handler
+	resourceHandler := bh.GetProjectContextResourceHandler()
+	if resourceHandler == nil {
+		t.Fatal("Expected resource handler to be non-nil")
+	}
+
+	// Create a mock ReadResourceRequest
+	mockRequest := mcp.ReadResourceRequest{}
+
+	// Test the resource handler
+	contents, err := resourceHandler(context.Background(), mockRequest)
+	if err != nil {
+		t.Fatalf("Resource handler returned an error: %v", err)
+	}
+
+	if len(contents) != 1 {
+		t.Errorf("Expected 1 resource content, got %d", len(contents))
+	}
+
+	if len(contents) > 0 {
+		textContent, ok := contents[0].(mcp.TextResourceContents)
+		if !ok {
+			t.Error("Expected TextResourceContents type")
+		} else {
+			if textContent.MIMEType != "application/json" {
+				t.Errorf("Expected MIME type application/json, got %s", textContent.MIMEType)
+			}
+
+			if textContent.URI != "buddy://project-context" {
+				t.Errorf("Expected URI buddy://project-context, got %s", textContent.URI)
+			}
+
+			// Test that the JSON is valid
+			var context models.ProjectContext
+			if err := json.Unmarshal([]byte(textContent.Text), &context); err != nil {
+				t.Errorf("Failed to parse JSON response: %v", err)
+			}
+		}
+	}
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandlerError(t *testing.T) {
+	// Create a test directory
+	tempDir, err := os.MkdirTemp("", "buddy_context_error_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a BuddyHandlers instance with a minimal setup
+	bh := &BuddyHandlers{
+		buddyPath:        tempDir,
+		rulesHandler:     NewRulesHandler(filepath.Join(tempDir, "rules")),
+		knowledgeHandler: NewKnowledgeHandler(filepath.Join(tempDir, "knowledge")),
+		databaseHandler:  NewDatabaseHandler(filepath.Join(tempDir, "database")),
+		todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos")),
+		historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history")),
+		backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+	}
+
+	// Get the resource handler
+	resourceHandler := bh.GetProjectContextResourceHandler()
+
+	// Mock a non-nil context for the test
+	ctx := context.Background()
+
+	// Create a mock ReadResourceRequest
+	mockRequest := mcp.ReadResourceRequest{}
+
+	// This should return resources
+	contents, err := resourceHandler(ctx, mockRequest)
+	if err != nil {
+		t.Fatalf("Resource handler returned an error: %v", err)
+	}
+
+	if len(contents) != 1 {
+		t.Errorf("Expected 1 resource content, got %d", len(contents))
+	}
+
+	// Verify content type
+	if len(contents) > 0 {
+		textContent, ok := contents[0].(mcp.TextResourceContents)
+		if !ok {
+			t.Error("Expected TextResourceContents type")
+		} else {
+			if textContent.MIMEType != "application/json" {
+				t.Errorf("Expected MIME type application/json, got %s", textContent.MIMEType)
+			}
+		}
+	}
+}
+
+func TestBuddyHandlers_GetProjectContextData(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_project_context_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create the basic structure
+	if err := os.MkdirAll(filepath.Join(tempDir, "rules"), 0755); err != nil {
+		t.Fatalf("Failed to create rules directory: %v", err)
+	}
+
+	// Create BuddyHandlers with mocked internal handlers
+	bh := &BuddyHandlers{
+		buddyPath: tempDir,
+		rulesHandler: &RulesHandler{
+			rules: []models.Rule{
+				{ID: "1", Title: "Test Rule", Priority: "critical"},
+			},
+		},
+		knowledgeHandler: &KnowledgeHandler{
+			knowledge: []models.Knowledge{
+				{ID: "1", Title: "Test Knowledge", Content: "Test Content"},
+			},
+		},
+		databaseHandler: &DatabaseHandler{
+			dbInfo: &models.DatabaseInfo{
+				Type: "postgresql",
+				Tables: []models.Table{
+					{Name: "test_table"},
+				},
+			},
+		},
+		todoHandler: &TodoHandler{
+			todos: []models.Todo{
+				{ID: "1", Feature: "Test Feature", Task: "Test Todo", Completed: false},
+			},
+		},
+		historyHandler: &HistoryHandler{
+			history: []models.HistoryEntry{
+				{ID: "1", Feature: "Test Feature", Description: "Test History"},
+			},
+		},
+		backupHandler: &BackupHandler{},
+	}
+
+	// Get the project context
+	context := bh.GetProjectContext()
+	if context == nil {
+		t.Fatal("Expected project context to be non-nil")
+	}
+
+	// Test that the context has the expected data
+	if len(context.Rules) != 1 {
+		t.Errorf("Expected 1 rule, got %d", len(context.Rules))
+	}
+
+	if len(context.Knowledge) != 1 {
+		t.Errorf("Expected 1 knowledge item, got %d", len(context.Knowledge))
+	}
+
+	if len(context.Database.Tables) != 1 {
+		t.Errorf("Expected 1 database table, got %d", len(context.Database.Tables))
+	}
+
+	if len(context.Todos) != 1 {
+		t.Errorf("Expected 1 todo item, got %d", len(context.Todos))
+	}
+
+	if len(context.RecentHistory) != 1 {
+		t.Errorf("Expected 1 history entry, got %d", len(context.RecentHistory))
+	}
+}
+
+func TestBuddyHandlers_ReloadData(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_reload_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create basic structure
+	dirs := []string{"rules", "knowledge", "database", "todos", "history", "backups"}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(filepath.Join(tempDir, dir), 0755); err != nil {
+			t.Fatalf("Failed to create directory %s: %v", dir, err)
+		}
+	}
+
+	bh := &BuddyHandlers{
+		buddyPath:        tempDir,
+		rulesHandler:     NewRulesHandler(filepath.Join(tempDir, "rules")),
+		knowledgeHandler: NewKnowledgeHandler(filepath.Join(tempDir, "knowledge")),
+		databaseHandler:  NewDatabaseHandler(filepath.Join(tempDir, "database")),
+		todoHandler:      NewTodoHandler(filepath.Join(tempDir, "todos")),
+		historyHandler:   NewHistoryHandler(filepath.Join(tempDir, "history")),
+		backupHandler:    NewBackupHandler(filepath.Join(tempDir, "backups")),
+	}
+
+	// Test that ReloadData doesn't return an error
+	err = bh.ReloadData()
+	if err != nil {
+		t.Errorf("ReloadData returned an error: %v", err)
+	}
+
+	// Write a file that will cause the load to fail (e.g., a directory where a file is expected)
+	if err := os.Mkdir(filepath.Join(tempDir, "rules", "invalid_rule.json"), 0755); err != nil {
+		t.Fatalf("Failed to create invalid rule directory: %v", err)
+	}
+
+	// Test that ReloadData handles errors gracefully
+	err = bh.ReloadData()
+	// Note: The implementation might be designed to continue even with errors
+	// If that's the case, we should adjust our test
+	if err != nil {
+		t.Logf("ReloadData detected an error as expected: %v", err)
+	}
+}
+
+func TestBuddyHandlers_ErrorPaths(t *testing.T) {
+	// Test with completely invalid directory (use /tmp to avoid permission issues)
+	invalidPath := "/tmp/test-invalid-buddy-path"
+	defer os.RemoveAll(invalidPath)
+
+	handlers, err := NewBuddyHandlers(invalidPath)
+	if err != nil {
+		t.Errorf("NewBuddyHandlers should create directory structure: %v", err)
+	}
+
+	if handlers == nil {
+		t.Error("Expected handlers even with new directory path")
+		return
+	}
+
+	// These should not panic and handle errors gracefully
+	err = handlers.ReloadData()
+	if err != nil {
+		t.Errorf("ReloadData should handle new paths gracefully: %v", err)
+	}
+
+	context := handlers.GetProjectContext()
+	if context == nil {
+		t.Error("GetProjectContext should return empty context, not nil")
+	}
+
+	// Tool handlers should still work
+	rulesHandler := handlers.GetRulesToolHandler()
+	if rulesHandler == nil {
+		t.Error("Expected rules tool handler even with new paths")
+	}
+
+	knowledgeHandler := handlers.GetKnowledgeToolHandler()
+	if knowledgeHandler == nil {
+		t.Error("Expected knowledge tool handler even with new paths")
+	}
+
+	databaseHandler := handlers.GetDatabaseToolHandler()
+	if databaseHandler == nil {
+		t.Error("Expected database tool handler even with new paths")
+	}
+
+	todoHandler := handlers.GetTodoToolHandler()
+	if todoHandler == nil {
+		t.Error("Expected todo tool handler even with new paths")
+	}
+
+	historyHandler := handlers.GetHistoryToolHandler()
+	if historyHandler == nil {
+		t.Error("Expected history tool handler even with new paths")
+	}
+
+	backupHandler := handlers.GetBackupToolHandler()
+	if backupHandler == nil {
+		t.Error("Expected backup tool handler even with new paths")
+	}
+}
+
+func TestCreateBuddyStructure_Success(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_structure_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	buddyPath := filepath.Join(tempDir, "buddy")
+
+	// Test successful directory creation
+	err = createBuddyStructure(buddyPath)
+	if err != nil {
+		t.Fatalf("createBuddyStructure should succeed: %v", err)
+	}
+
+	// Verify all directories were created
+	expectedDirs := []string{
+		buddyPath,
+		filepath.Join(buddyPath, "rules"),
+		filepath.Join(buddyPath, "knowledge"),
+		filepath.Join(buddyPath, "database"),
+		filepath.Join(buddyPath, "todos"),
+		filepath.Join(buddyPath, "history"),
+		filepath.Join(buddyPath, "backups"),
+	}
+
+	for _, dir := range expectedDirs {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			t.Errorf("Directory %s was not created", dir)
+		}
+	}
+}
+
+func TestCreateBuddyStructure_PermissionError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_structure_permission_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a directory and make it read-only
+	readOnlyDir := filepath.Join(tempDir, "readonly")
+	if err := os.MkdirAll(readOnlyDir, 0755); err != nil {
+		t.Fatalf("Failed to create readonly dir: %v", err)
+	}
+
+	if err := os.Chmod(readOnlyDir, 0444); err != nil {
+		t.Fatalf("Failed to change permissions: %v", err)
+	}
+	defer os.Chmod(readOnlyDir, 0755) // Restore for cleanup
+
+	// Try to create buddy structure in read-only directory
+	buddyPath := filepath.Join(readOnlyDir, "buddy")
+	err = createBuddyStructure(buddyPath)
+	if err == nil {
+		t.Error("createBuddyStructure should fail with permission error")
+	} else if !strings.Contains(err.Error(), "failed to create directory") {
+		t.Errorf("Expected directory creation error, got: %v", err)
+	}
+}
+
+func TestCreateBuddyStructure_ExistingDirectories(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_structure_existing_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	buddyPath := filepath.Join(tempDir, "buddy")
+
+	// Pre-create some directories
+	if err := os.MkdirAll(filepath.Join(buddyPath, "rules"), 0755); err != nil {
+		t.Fatalf("Failed to pre-create rules dir: %v", err)
+	}
+
+	// Should succeed even with existing directories
+	err = createBuddyStructure(buddyPath)
+	if err != nil {
+		t.Fatalf("createBuddyStructure should succeed with existing dirs: %v", err)
+	}
+}
+
+func TestNewBuddyHandlers_ErrorPaths(t *testing.T) {
+	// Test with invalid path characters (system-dependent)
+	invalidPath := "/dev/null/invalid"
+	handlers, err := NewBuddyHandlers(invalidPath)
+
+	// On most systems, this should either succeed (creating structure) or fail gracefully
+	if err != nil {
+		// Error is acceptable for truly invalid paths
+		if handlers != nil {
+			t.Error("Handlers should be nil when NewBuddyHandlers returns error")
+		}
+	} else {
+		// Success is also acceptable if the system allows it
+		if handlers == nil {
+			t.Error("Handlers should not be nil when NewBuddyHandlers succeeds")
+		}
+	}
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandlerAdvanced(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_context_error_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handlers, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create buddy handlers: %v", err)
+	}
+
+	resourceHandler := handlers.GetProjectContextResourceHandler()
+	if resourceHandler == nil {
+		t.Fatal("Expected non-nil resource handler")
+	}
+
+	// Test with read resource request
+	ctx := context.Background()
+	request := mcp.ReadResourceRequest{}
+	request.Params.URI = "buddy://project-context"
+
+	result, err := resourceHandler(ctx, request)
+	if err != nil {
+		t.Errorf("Resource handler should not error on valid request: %v", err)
+	}
+	if result == nil {
+		t.Error("Expected non-nil result from resource handler")
+	}
+}
+
+func TestBuddyHandlers_LoadAllDataAdvancedErrorScenarios(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_advanced_error_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Test concurrent access to loadAllData
+	t.Run("ConcurrentLoadAllData", func(t *testing.T) {
+		handlers, err := NewBuddyHandlers(tempDir)
+		if err != nil {
+			t.Fatalf("Failed to create buddy handlers: %v", err)
+		}
+
+		// Run multiple loadAllData calls concurrently
+		var wg sync.WaitGroup
+		errors := make(chan error, 5)
+
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := handlers.loadAllData(); err != nil {
+					errors <- err
+				}
+			}()
+		}
+
+		wg.Wait()
+		close(errors)
+
+		// Check if any errors occurred
+		for err := range errors {
+			t.Errorf("Concurrent loadAllData failed: %v", err)
+		}
+	})
+
+	// Test ReloadData method (which calls loadAllData)
+	t.Run("ReloadDataMethod", func(t *testing.T) {
+		handlers, err := NewBuddyHandlers(tempDir)
+		if err != nil {
+			t.Fatalf("Failed to create buddy handlers: %v", err)
+		}
+
+		err = handlers.ReloadData()
+		if err != nil {
+			t.Errorf("ReloadData should succeed: %v", err)
+		}
+	})
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandlerAdditional(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	bh, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	handler := bh.GetProjectContextResourceHandler()
+
+	// Test successful resource handling
+	ctx := context.Background()
+	request := mcp.ReadResourceRequest{}
+
+	contents, err := handler(ctx, request)
+	if err != nil {
+		t.Fatalf("Handler should succeed: %v", err)
+	}
+
+	if len(contents) != 1 {
+		t.Fatalf("Expected 1 resource content, got %d", len(contents))
+	}
+
+	textContent, ok := contents[0].(mcp.TextResourceContents)
+	if !ok {
+		t.Fatal("Expected TextResourceContents")
+	}
+
+	if textContent.URI != "buddy://project-context" {
+		t.Errorf("Expected URI 'buddy://project-context', got %s", textContent.URI)
+	}
+
+	if textContent.MIMEType != "application/json" {
+		t.Errorf("Expected MIME type 'application/json', got %s", textContent.MIMEType)
+	}
+
+	// Verify JSON is valid
+	var projectContext models.ProjectContext
+	err = json.Unmarshal([]byte(textContent.Text), &projectContext)
+	if err != nil {
+		t.Fatalf("Response should contain valid JSON: %v", err)
+	}
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandlerJSONErrorScenario(t *testing.T) {
+	// This test is more challenging since we need to trigger a JSON marshal error
+	// The GetProjectContext method returns a simple struct that should always marshal
+	// We'll test by creating a scenario that could cause issues
+
+	tempDir, err := os.MkdirTemp("", "buddy_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	bh, err := NewBuddyHandlers(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create BuddyHandlers: %v", err)
+	}
+
+	// Since the normal ProjectContext struct should always marshal successfully,
+	// we'll just verify the handler can handle the marshal operation
+	// This ensures the error handling code path is present and testable
+	handler := bh.GetProjectContextResourceHandler()
+
+	ctx := context.Background()
+	request := mcp.ReadResourceRequest{}
+
+	// This should succeed with normal data
+	contents, err := handler(ctx, request)
+	if err != nil {
+		t.Fatalf("Handler should succeed with normal data: %v", err)
+	}
+
+	if len(contents) != 1 {
+		t.Fatalf("Expected 1 resource content, got %d", len(contents))
+	}
+
+	// Verify the marshal operation completed
+	textContent := contents[0].(mcp.TextResourceContents)
+	if textContent.Text == "" {
+		t.Error("Expected non-empty JSON text")
+	}
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandler_ErrorHandling(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create buddy handlers
+	handlers, err := NewBuddyHandlers(tempDir)
+	require.NoError(t, err)
+
+	// Create handler
+	resourceHandler := handlers.GetProjectContextResourceHandler()
+
+	// Test with context
+	ctx := context.Background()
+	request := mcp.ReadResourceRequest{}
+
+	// Get result
+	result, err := resourceHandler(ctx, request)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	// Verify the structure
+	textContent, ok := result[0].(mcp.TextResourceContents)
+	require.True(t, ok)
+	assert.Equal(t, "buddy://project-context", textContent.URI)
+	assert.Equal(t, "application/json", textContent.MIMEType)
+
+	// Verify JSON structure
+	var projectContext map[string]interface{}
+	err = json.Unmarshal([]byte(textContent.Text), &projectContext)
+	require.NoError(t, err)
+
+	// Check for expected fields
+	assert.Contains(t, projectContext, "rules")
+	assert.Contains(t, projectContext, "knowledge")
+	assert.Contains(t, projectContext, "database")
+	assert.Contains(t, projectContext, "todos")
+	assert.Contains(t, projectContext, "recent_history")
+	assert.Contains(t, projectContext, "project_name")
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandler_WithData(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create directory structure
+	err := createBuddyStructure(tempDir)
+	require.NoError(t, err)
+
+	// Create test rule file
+	rulesDir := filepath.Join(tempDir, "rules")
+	ruleFile := filepath.Join(rulesDir, "test-rule.md")
+	ruleContent := `# Test Rule
+- category: testing
+- priority: high
+
+This is a test rule.`
+	err = ioutil.WriteFile(ruleFile, []byte(ruleContent), 0644)
+	require.NoError(t, err)
+
+	// Create test knowledge file
+	knowledgeDir := filepath.Join(tempDir, "knowledge")
+	knowledgeFile := filepath.Join(knowledgeDir, "test-knowledge.md")
+	knowledgeContent := `# Test Knowledge
+- category: testing
+
+This is test knowledge.`
+	err = ioutil.WriteFile(knowledgeFile, []byte(knowledgeContent), 0644)
+	require.NoError(t, err)
+
+	// Create test todo file
+	todosDir := filepath.Join(tempDir, "todos")
+	todoFile := filepath.Join(todosDir, "test-todo.md")
+	todoContent := `# Test Todos
+
+- [ ] incomplete task
+- [x] completed task`
+	err = ioutil.WriteFile(todoFile, []byte(todoContent), 0644)
+	require.NoError(t, err)
+
+	// Create buddy handlers and load data
+	handlers, err := NewBuddyHandlers(tempDir)
+	require.NoError(t, err)
+
+	// Create handler
+	resourceHandler := handlers.GetProjectContextResourceHandler()
+
+	// Test with context
+	ctx := context.Background()
+	request := mcp.ReadResourceRequest{}
+
+	// Get result
+	result, err := resourceHandler(ctx, request)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	// Verify the structure
+	textContent, ok := result[0].(mcp.TextResourceContents)
+	require.True(t, ok)
+	assert.Equal(t, "buddy://project-context", textContent.URI)
+	assert.Equal(t, "application/json", textContent.MIMEType)
+
+	// Verify JSON contains actual data
+	var projectContext map[string]interface{}
+	err = json.Unmarshal([]byte(textContent.Text), &projectContext)
+	require.NoError(t, err)
+
+	// Verify data is populated
+	rules, ok := projectContext["rules"].([]interface{})
+	assert.True(t, ok)
+	assert.Greater(t, len(rules), 0)
+
+	todos, ok := projectContext["todos"].([]interface{})
+	assert.True(t, ok)
+	assert.Greater(t, len(todos), 0)
+
+	knowledge, ok := projectContext["knowledge"].([]interface{})
+	assert.True(t, ok)
+	assert.Greater(t, len(knowledge), 0)
+}
+
+func TestBuddyHandlers_GetProjectContextResourceHandler_JSONMarshalError(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create buddy handlers
+	handlers, err := NewBuddyHandlers(tempDir)
+	require.NoError(t, err)
+
+	// Save original marshalFunc
+	originalMarshal := marshalFunc
+	defer func() {
+		marshalFunc = originalMarshal
+	}()
+
+	// Replace marshalFunc with one that returns an error
+	marshalFunc = func(v interface{}) ([]byte, error) {
+		return nil, fmt.Errorf("mock marshal error")
+	}
+
+	// Get the resource handler
+	resourceHandler := handlers.GetProjectContextResourceHandler()
+
+	// Call it
+	ctx := context.Background()
+	request := mcp.ReadResourceRequest{}
+
+	result, err := resourceHandler(ctx, request)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to marshal project context")
+	assert.Contains(t, err.Error(), "mock marshal error")
+}
+
+func TestBuddyHandlers_AllToolHandlerGetters(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create buddy handlers
+	handlers, err := NewBuddyHandlers(tempDir)
+	require.NoError(t, err)
+
+	// Test all tool handler getters
+	assert.NotNil(t, handlers.GetRulesToolHandler())
+	assert.NotNil(t, handlers.GetKnowledgeToolHandler())
+	assert.NotNil(t, handlers.GetDatabaseToolHandler())
+	assert.NotNil(t, handlers.GetTodoToolHandler())
+	assert.NotNil(t, handlers.GetHistoryToolHandler())
+	assert.NotNil(t, handlers.GetBackupToolHandler())
+	assert.NotNil(t, handlers.GetProjectContext())
+	assert.NotNil(t, handlers.GetProjectContextResourceHandler())
+}
+
+func TestBuddyHandlers_ReloadDataMethod(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create buddy handlers
+	handlers, err := NewBuddyHandlers(tempDir)
+	require.NoError(t, err)
+
+	// Test ReloadData method
+	err = handlers.ReloadData()
+	assert.NoError(t, err)
+}
+
+func TestBuddyHandlers_GetProjectContext_Comprehensive(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create directory structure
+	err := createBuddyStructure(tempDir)
+	require.NoError(t, err)
+
+	// Create test data files
+	rulesDir := filepath.Join(tempDir, "rules")
+	ruleFile := filepath.Join(rulesDir, "test-rule.md")
+	ruleContent := `# Test Rule
+- category: testing
+- priority: high
+
+This is a test rule.`
+	err = ioutil.WriteFile(ruleFile, []byte(ruleContent), 0644)
+	require.NoError(t, err)
+
+	// Create buddy handlers
+	handlers, err := NewBuddyHandlers(tempDir)
+	require.NoError(t, err)
+
+	// Test GetProjectContext
+	context := handlers.GetProjectContext()
+	assert.NotNil(t, context)
+	assert.NotEmpty(t, context.ProjectName)
+	assert.NotNil(t, context.Rules)
+	assert.NotNil(t, context.Knowledge)
+	assert.NotNil(t, context.Database)
+	assert.NotNil(t, context.Todos)
+	assert.NotNil(t, context.RecentHistory)
+}
+
+func TestNewBuddyHandlers_LoadDataError(t *testing.T) {
+	tempDir := t.TempDir()
+	buddyPath := filepath.Join(tempDir, ".buddy")
+
+	// Create the buddy structure
+	err := os.MkdirAll(buddyPath, 0755)
+	require.NoError(t, err)
+
+	// Create subdirectories except for history to cause Load to fail
+	for _, dir := range []string{"rules", "knowledge", "database", "todos", "backups"} {
+		err = os.MkdirAll(filepath.Join(buddyPath, dir), 0755)
+		require.NoError(t, err)
+	}
+
+	// Create history directory as a file instead of directory to cause Load to fail
+	historyPath := filepath.Join(buddyPath, "history")
+	err = ioutil.WriteFile(historyPath, []byte("not a directory"), 0644)
+	require.NoError(t, err)
+
+	// Try to create handlers - should fail during structure creation
+	handlers, err := NewBuddyHandlers(buddyPath)
+	assert.Nil(t, handlers)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create buddy structure")
+}

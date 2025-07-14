@@ -1,0 +1,1404 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/models"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestHistoryHandler_Load(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test history file
+	historyEntry := models.HistoryEntry{
+		ID:          "auth-refactor-2024",
+		Timestamp:   time.Now(),
+		Feature:     "Authentication",
+		Description: "Migrated from sessions to JWT tokens",
+		Changes: []models.Change{
+			{
+				FilePath:   "auth/session.go",
+				ChangeType: "removed",
+				Before:     "session-based auth",
+				After:      "JWT-based auth",
+			},
+		},
+		Reasoning: "Better scalability for microservices",
+		FilePath:  filepath.Join(tempDir, "auth-refactor.json"),
+	}
+
+	historyData, err := json.MarshalIndent(historyEntry, "", "  ")
+	if err != nil {
+		t.Fatalf("Failed to marshal history entry: %v", err)
+	}
+
+	historyFile := filepath.Join(tempDir, "auth-refactor.json")
+	err = os.WriteFile(historyFile, historyData, 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test history file: %v", err)
+	}
+
+	// Test loading history
+	handler := NewHistoryHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load history: %v", err)
+	}
+
+	history := handler.GetHistory()
+	if len(history) != 1 {
+		t.Errorf("Expected 1 history entry, got %d", len(history))
+	}
+
+	entry := history[0]
+	if entry.Feature != "Authentication" {
+		t.Errorf("Expected feature to be 'Authentication', got %s", entry.Feature)
+	}
+
+	if len(entry.Changes) != 1 {
+		t.Errorf("Expected 1 change, got %d", len(entry.Changes))
+	}
+}
+
+func TestHistoryHandler_AddHistoryEntry(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "history_add_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewHistoryHandler(tempDir)
+
+	changes := []models.Change{
+		{
+			FilePath:   "/src/example.go",
+			ChangeType: "modified",
+			Before:     "old code",
+			After:      "new code",
+		},
+	}
+
+	err = handler.AddHistoryEntry("test-feature", "Test description", "Test reasoning", changes)
+	if err != nil {
+		t.Fatalf("AddHistoryEntry should succeed: %v", err)
+	}
+
+	// Verify entry was added to memory
+	if len(handler.history) != 1 {
+		t.Errorf("Expected 1 history entry, got %d", len(handler.history))
+	}
+
+	entry := handler.history[0]
+	if entry.Feature != "test-feature" {
+		t.Errorf("Expected feature 'test-feature', got %s", entry.Feature)
+	}
+	if entry.Description != "Test description" {
+		t.Errorf("Expected description 'Test description', got %s", entry.Description)
+	}
+	if len(entry.Changes) != 1 {
+		t.Errorf("Expected 1 change, got %d", len(entry.Changes))
+	}
+
+	// Verify file was created
+	files, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to read temp dir: %v", err)
+	}
+	if len(files) != 1 {
+		t.Errorf("Expected 1 file created, got %d", len(files))
+	}
+}
+
+func TestHistoryHandler_AddHistoryEntryErrorCases(t *testing.T) {
+	// Test with non-existent directory
+	t.Run("NonExistentDirectory", func(t *testing.T) {
+		handler := NewHistoryHandler("/completely/nonexistent/path")
+
+		changes := []models.Change{
+			{FilePath: "/test.go", ChangeType: "modified"},
+		}
+
+		err := handler.AddHistoryEntry("test", "desc", "reason", changes)
+		if err == nil {
+			t.Error("Expected error when writing to non-existent directory")
+		}
+	})
+
+	// Test with permission issues
+	t.Run("PermissionError", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "history_permission_test")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		// Make directory read-only
+		if err := os.Chmod(tempDir, 0444); err != nil {
+			t.Fatalf("Failed to change permissions: %v", err)
+		}
+		defer os.Chmod(tempDir, 0755) // Restore for cleanup
+
+		handler := NewHistoryHandler(tempDir)
+		changes := []models.Change{
+			{FilePath: "/test.go", ChangeType: "modified"},
+		}
+
+		err = handler.AddHistoryEntry("test", "desc", "reason", changes)
+		if err == nil {
+			t.Error("Expected error when writing to read-only directory")
+		}
+	})
+
+	// Test with special characters in feature name
+	t.Run("SpecialCharactersInFeature", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "history_special_test")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		handler := NewHistoryHandler(tempDir)
+		changes := []models.Change{
+			{FilePath: "/test.go", ChangeType: "modified"},
+		}
+
+		// Feature name with special characters that need sanitizing
+		err = handler.AddHistoryEntry("test/feature:with*special<chars>", "desc", "reason", changes)
+		if err != nil {
+			t.Fatalf("Should handle special characters in feature name: %v", err)
+		}
+
+		// Verify entry was added
+		if len(handler.history) != 1 {
+			t.Errorf("Expected 1 history entry, got %d", len(handler.history))
+		}
+
+		// Verify file was created with sanitized name
+		files, err := os.ReadDir(tempDir)
+		if err != nil {
+			t.Fatalf("Failed to read temp dir: %v", err)
+		}
+		if len(files) != 1 {
+			t.Errorf("Expected 1 file created, got %d", len(files))
+		}
+
+		// File name should be sanitized
+		filename := files[0].Name()
+		if strings.Contains(filename, "/") || strings.Contains(filename, ":") ||
+			strings.Contains(filename, "*") || strings.Contains(filename, "<") ||
+			strings.Contains(filename, ">") {
+			t.Errorf("Filename should be sanitized, got: %s", filename)
+		}
+	})
+
+	// Test with empty changes array
+	t.Run("EmptyChanges", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "history_empty_changes_test")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		handler := NewHistoryHandler(tempDir)
+
+		err = handler.AddHistoryEntry("test", "desc", "reason", []models.Change{})
+		if err != nil {
+			t.Fatalf("Should handle empty changes array: %v", err)
+		}
+
+		if len(handler.history) != 1 {
+			t.Errorf("Expected 1 history entry, got %d", len(handler.history))
+		}
+
+		entry := handler.history[0]
+		if len(entry.Changes) != 0 {
+			t.Errorf("Expected 0 changes, got %d", len(entry.Changes))
+		}
+	})
+
+	// Test concurrent access
+	t.Run("ConcurrentAccess", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "history_concurrent_test")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		handler := NewHistoryHandler(tempDir)
+
+		var wg sync.WaitGroup
+		errors := make(chan error, 5)
+
+		// Run multiple AddHistoryEntry calls concurrently
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				changes := []models.Change{
+					{FilePath: fmt.Sprintf("/test%d.go", id), ChangeType: "modified"},
+				}
+				if err := handler.AddHistoryEntry(fmt.Sprintf("feature%d", id), "desc", "reason", changes); err != nil {
+					errors <- err
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		close(errors)
+
+		// Check if any errors occurred
+		for err := range errors {
+			t.Errorf("Concurrent AddHistoryEntry failed: %v", err)
+		}
+
+		// Should have 5 entries
+		if len(handler.history) != 5 {
+			t.Errorf("Expected 5 history entries, got %d", len(handler.history))
+		}
+	})
+}
+
+func TestHistoryHandler_GetHistoryByFeature(t *testing.T) {
+	handler := NewHistoryHandler("")
+
+	// Add test history entries
+	handler.history = []models.HistoryEntry{
+		{ID: "1", Feature: "Authentication", Description: "Added login"},
+		{ID: "2", Feature: "Dashboard", Description: "Added charts"},
+		{ID: "3", Feature: "Authentication", Description: "Added logout"},
+		{ID: "4", Feature: "API", Description: "Added endpoints"},
+	}
+
+	authHistory := handler.GetHistoryByFeature("Authentication")
+	if len(authHistory) != 2 {
+		t.Errorf("Expected 2 authentication entries, got %d", len(authHistory))
+	}
+
+	dashboardHistory := handler.GetHistoryByFeature("Dashboard")
+	if len(dashboardHistory) != 1 {
+		t.Errorf("Expected 1 dashboard entry, got %d", len(dashboardHistory))
+	}
+
+	nonExistentHistory := handler.GetHistoryByFeature("NonExistent")
+	if len(nonExistentHistory) != 0 {
+		t.Errorf("Expected 0 entries for non-existent feature, got %d", len(nonExistentHistory))
+	}
+}
+
+func TestHistoryHandler_SearchHistory(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "history_search_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewHistoryHandler(tempDir)
+
+	// Add test entries with various searchable content
+	entries := []models.HistoryEntry{
+		{
+			ID:          "entry1",
+			Feature:     "authentication",
+			Description: "Added user login system",
+			Reasoning:   "Security requirement",
+			Changes: []models.Change{
+				{FilePath: "/src/auth/login.go", ChangeType: "created"},
+				{FilePath: "/src/auth/middleware.go", ChangeType: "modified"},
+			},
+		},
+		{
+			ID:          "entry2",
+			Feature:     "database",
+			Description: "Database migration script",
+			Reasoning:   "Schema updates needed",
+			Changes: []models.Change{
+				{FilePath: "/migrations/001_users.sql", ChangeType: "created"},
+			},
+		},
+		{
+			ID:          "entry3",
+			Feature:     "frontend",
+			Description: "React component updates",
+			Reasoning:   "UI improvements",
+			Changes: []models.Change{
+				{FilePath: "/src/components/Button.tsx", ChangeType: "modified"},
+				{FilePath: "/src/components/Modal.tsx", ChangeType: "created"},
+			},
+		},
+	}
+
+	// Add entries to handler
+	handler.history = entries
+
+	// Test search by feature
+	t.Run("SearchByFeature", func(t *testing.T) {
+		results := handler.SearchHistory("auth")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'auth', got %d", len(results))
+		}
+		if len(results) > 0 && results[0].Feature != "authentication" {
+			t.Errorf("Expected authentication feature, got %s", results[0].Feature)
+		}
+	})
+
+	// Test search by description
+	t.Run("SearchByDescription", func(t *testing.T) {
+		results := handler.SearchHistory("login")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'login', got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry1" {
+			t.Errorf("Expected entry1, got %s", results[0].ID)
+		}
+	})
+
+	// Test search by reasoning
+	t.Run("SearchByReasoning", func(t *testing.T) {
+		results := handler.SearchHistory("security")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'security', got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry1" {
+			t.Errorf("Expected entry1, got %s", results[0].ID)
+		}
+	})
+
+	// Test search by file path - this covers the missing coverage in SearchHistory
+	t.Run("SearchByFilePath", func(t *testing.T) {
+		results := handler.SearchHistory("migrations")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'migrations', got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry2" {
+			t.Errorf("Expected entry2, got %s", results[0].ID)
+		}
+	})
+
+	// Test search by specific file extension
+	t.Run("SearchByFileExtension", func(t *testing.T) {
+		results := handler.SearchHistory(".tsx")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for '.tsx', got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry3" {
+			t.Errorf("Expected entry3, got %s", results[0].ID)
+		}
+	})
+
+	// Test case insensitive search
+	t.Run("CaseInsensitiveSearch", func(t *testing.T) {
+		results := handler.SearchHistory("REACT")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'REACT', got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry3" {
+			t.Errorf("Expected entry3, got %s", results[0].ID)
+		}
+	})
+
+	// Test no results
+	t.Run("NoResults", func(t *testing.T) {
+		results := handler.SearchHistory("nonexistent")
+		if len(results) != 0 {
+			t.Errorf("Expected 0 results for 'nonexistent', got %d", len(results))
+		}
+	})
+
+	// Test empty query
+	t.Run("EmptyQuery", func(t *testing.T) {
+		results := handler.SearchHistory("")
+		// Empty query should match everything
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results for empty query, got %d", len(results))
+		}
+	})
+
+	// Test multiple matches via file path search
+	t.Run("MultipleFilePathMatches", func(t *testing.T) {
+		results := handler.SearchHistory("src")
+		// Should match entries 1 and 3 (both have /src/ in file paths)
+		if len(results) != 2 {
+			t.Errorf("Expected 2 results for 'src', got %d", len(results))
+		}
+	})
+}
+
+func TestHistoryHandler_GetRecentHistory(t *testing.T) {
+	handler := NewHistoryHandler("")
+
+	// Add test history entries with different timestamps
+	now := time.Now()
+	handler.history = []models.HistoryEntry{
+		{ID: "1", Feature: "Auth", Timestamp: now.Add(-1 * time.Hour)},
+		{ID: "2", Feature: "Dashboard", Timestamp: now.Add(-2 * time.Hour)},
+		{ID: "3", Feature: "API", Timestamp: now.Add(-30 * time.Minute)},
+		{ID: "4", Feature: "UI", Timestamp: now.Add(-3 * time.Hour)},
+	}
+
+	recent := handler.GetRecentHistory(2)
+	if len(recent) != 2 {
+		t.Errorf("Expected 2 recent entries, got %d", len(recent))
+	}
+
+	// Just verify we got the correct number of entries
+	// The actual sorting behavior may vary based on implementation
+}
+
+func TestHistoryHandler_SanitizeFilename(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected string
+	}{
+		{"Simple Name", "Simple_Name"},
+		{"Complex Feature: With Special! Characters@", "Complex_Feature__With_Special!_Characters@"},
+		{"Multiple   Spaces", "Multiple___Spaces"},
+		{"Mixed_CASE-filename", "Mixed_CASE-filename"},
+		{"", ""},
+	}
+
+	for _, tc := range testCases {
+		result := sanitizeFilename(tc.input)
+		if result != tc.expected {
+			t.Errorf("sanitizeFilename(%s) = %s, expected %s", tc.input, result, tc.expected)
+		}
+	}
+}
+
+func TestHistoryHandler_GetToolHandler(t *testing.T) {
+	handler := NewHistoryHandler("")
+
+	// Add test history
+	handler.history = []models.HistoryEntry{
+		{ID: "1", Feature: "Auth", Description: "Added login"},
+	}
+
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected tool handler, got nil")
+	}
+}
+
+func TestHistoryHandler_LoadNonExistentDirectory(t *testing.T) {
+	handler := NewHistoryHandler("/non/existent/path")
+	err := handler.Load()
+
+	// Should not error when directory doesn't exist
+	if err != nil {
+		t.Errorf("Expected no error for non-existent directory, got: %v", err)
+	}
+
+	history := handler.GetHistory()
+	if len(history) != 0 {
+		t.Errorf("Expected 0 history entries for non-existent directory, got %d", len(history))
+	}
+}
+
+func TestHistoryHandler_LoadInvalidFile(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create invalid JSON file
+	invalidFile := filepath.Join(tempDir, "invalid.json")
+	err = os.WriteFile(invalidFile, []byte("{invalid json"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid file: %v", err)
+	}
+
+	// Test loading history - expect error since invalid files cause load to fail
+	handler := NewHistoryHandler(tempDir)
+	err = handler.Load()
+	if err == nil {
+		t.Error("Expected error when loading invalid JSON file")
+	}
+}
+
+func TestHistoryHandler_ConcurrentAccess(t *testing.T) {
+	handler := NewHistoryHandler("")
+
+	// Add test history
+	handler.history = []models.HistoryEntry{
+		{ID: "1", Feature: "Auth", Description: "Login"},
+	}
+
+	// Test concurrent read access
+	done := make(chan bool, 2)
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			history := handler.GetHistory()
+			if len(history) != 1 {
+				t.Errorf("Concurrent read failed: expected 1 entry, got %d", len(history))
+			}
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			results := handler.SearchHistory("Auth")
+			if len(results) != 1 {
+				t.Errorf("Concurrent search failed: expected 1 result, got %d", len(results))
+			}
+		}
+		done <- true
+	}()
+
+	// Wait for both goroutines to complete
+	<-done
+	<-done
+}
+
+func TestHistoryHandler_GetToolHandlerComprehensive(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "history_tool_handler_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewHistoryHandler(tempDir)
+	toolHandler := handler.GetToolHandler()
+	ctx := context.Background()
+
+	// Test missing action parameter
+	t.Run("MissingAction", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			// Missing action
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when action is missing")
+		}
+	})
+
+	// Test list action with feature filter
+	t.Run("ListWithFeature", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":  "list",
+			"feature": "test-feature",
+		}
+
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Unexpected error for list with feature: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+	})
+
+	// Test list action with limit
+	t.Run("ListWithLimit", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "list",
+			"limit":  5.0, // JSON numbers are float64
+		}
+
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Unexpected error for list with limit: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+	})
+
+	// Test search action
+	t.Run("SearchAction", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "search",
+			"query":  "test query",
+		}
+
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Unexpected error for search: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+	})
+
+	// Test search action missing query
+	t.Run("SearchMissingQuery", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "search",
+			// Missing query
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when query is missing for search")
+		}
+	})
+
+	// Test add action with all required parameters
+	t.Run("AddActionValid", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":      "add",
+			"feature":     "test-feature",
+			"description": "test description",
+			"reasoning":   "test reasoning",
+			"changes": []interface{}{
+				map[string]interface{}{
+					"file_path":   "/test/file.go",
+					"change_type": "modified",
+					"before":      "old content",
+					"after":       "new content",
+				},
+			},
+		}
+
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Unexpected error for add action: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+	})
+
+	// Test add action missing feature
+	t.Run("AddMissingFeature", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "add",
+			// Missing feature
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when feature is missing for add")
+		}
+	})
+
+	// Test add action missing description
+	t.Run("AddMissingDescription", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":  "add",
+			"feature": "test-feature",
+			// Missing description
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when description is missing for add")
+		}
+	})
+
+	// Test add action missing reasoning
+	t.Run("AddMissingReasoning", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":      "add",
+			"feature":     "test-feature",
+			"description": "test description",
+			// Missing reasoning
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when reasoning is missing for add")
+		}
+	})
+
+	// Test add action missing changes
+	t.Run("AddMissingChanges", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":      "add",
+			"feature":     "test-feature",
+			"description": "test description",
+			"reasoning":   "test reasoning",
+			// Missing changes
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when changes are missing for add")
+		}
+	})
+
+	// Test add action with invalid changes format
+	t.Run("AddInvalidChanges", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":      "add",
+			"feature":     "test-feature",
+			"description": "test description",
+			"reasoning":   "test reasoning",
+			"changes":     "invalid", // Should be array
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when changes have invalid format")
+		}
+	})
+
+	// Test add action with malformed change objects
+	t.Run("AddMalformedChangeObjects", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":      "add",
+			"feature":     "test-feature",
+			"description": "test description",
+			"reasoning":   "test reasoning",
+			"changes": []interface{}{
+				"invalid change object", // Should be map
+				map[string]interface{}{
+					"file_path":   "/test/file.go",
+					"change_type": "modified",
+				},
+			},
+		}
+
+		// This should still succeed, just skip invalid change objects
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Should handle malformed change objects gracefully: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+	})
+
+	// Test invalid action
+	t.Run("InvalidAction", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "invalid_action",
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error for invalid action")
+		}
+	})
+}
+
+func TestHistoryHandler_LoadWithInvalidJSON(t *testing.T) {
+	// Test Load function with invalid JSON file
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create invalid JSON file
+	invalidFile := filepath.Join(tempDir, "invalid.json")
+	err = os.WriteFile(invalidFile, []byte("{invalid json content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid JSON file: %v", err)
+	}
+
+	handler := NewHistoryHandler(tempDir)
+
+	// Load should fail due to JSON unmarshal error
+	err = handler.Load()
+	if err == nil {
+		t.Error("Expected Load to fail with invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to load history") {
+		t.Errorf("Expected JSON error message, got: %v", err)
+	}
+}
+
+func TestHistoryHandler_LoadWithMixedFiles(t *testing.T) {
+	// Test Load function with mix of valid JSON, invalid JSON, and non-JSON files
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create valid JSON file
+	validEntry := models.HistoryEntry{
+		ID:          "valid-entry",
+		Timestamp:   time.Now(),
+		Feature:     "Valid Feature",
+		Description: "Valid description",
+		Changes:     []models.Change{},
+		Reasoning:   "Valid reasoning",
+	}
+	validData, _ := json.MarshalIndent(validEntry, "", "  ")
+	err = os.WriteFile(filepath.Join(tempDir, "valid.json"), validData, 0644)
+	if err != nil {
+		t.Fatalf("Failed to create valid JSON file: %v", err)
+	}
+
+	// Create invalid JSON file
+	err = os.WriteFile(filepath.Join(tempDir, "invalid.json"), []byte("{broken json"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid JSON file: %v", err)
+	}
+
+	// Create non-JSON files (should be ignored)
+	err = os.WriteFile(filepath.Join(tempDir, "readme.txt"), []byte("not json"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create text file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(tempDir, "config.md"), []byte("markdown content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create markdown file: %v", err)
+	}
+
+	handler := NewHistoryHandler(tempDir)
+
+	// Load should fail due to invalid JSON
+	err = handler.Load()
+	if err == nil {
+		t.Error("Expected Load to fail due to invalid JSON file")
+	}
+	if !strings.Contains(err.Error(), "failed to load history") {
+		t.Errorf("Expected history load error, got: %v", err)
+	}
+}
+
+func TestHistoryHandler_LoadFileReadError(t *testing.T) {
+	// Test loadHistoryFile with unreadable file
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create file then make it unreadable
+	testFile := filepath.Join(tempDir, "test.json")
+	err = os.WriteFile(testFile, []byte("{}"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Make file unreadable
+	err = os.Chmod(testFile, 0000)
+	if err != nil {
+		t.Fatalf("Failed to change file permissions: %v", err)
+	}
+	// Restore permissions for cleanup
+	defer os.Chmod(testFile, 0644)
+
+	handler := NewHistoryHandler(tempDir)
+
+	// Load should fail due to file read error
+	err = handler.Load()
+	if err == nil {
+		t.Error("Expected Load to fail due to file read error")
+	}
+	if !strings.Contains(err.Error(), "failed to load history") {
+		t.Errorf("Expected file read error, got: %v", err)
+	}
+}
+
+func TestHistoryHandler_LoadWithTimestampSorting(t *testing.T) {
+	// Test that history entries are sorted by timestamp descending
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create entries with different timestamps
+	older := models.HistoryEntry{
+		ID:          "older-entry",
+		Timestamp:   time.Date(2024, 1, 14, 10, 0, 0, 0, time.UTC),
+		Feature:     "Older Feature",
+		Description: "Older description",
+		Changes:     []models.Change{},
+		Reasoning:   "Older reasoning",
+	}
+
+	newer := models.HistoryEntry{
+		ID:          "newer-entry",
+		Timestamp:   time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC),
+		Feature:     "Newer Feature",
+		Description: "Newer description",
+		Changes:     []models.Change{},
+		Reasoning:   "Newer reasoning",
+	}
+
+	middle := models.HistoryEntry{
+		ID:          "middle-entry",
+		Timestamp:   time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
+		Feature:     "Middle Feature",
+		Description: "Middle description",
+		Changes:     []models.Change{},
+		Reasoning:   "Middle reasoning",
+	}
+
+	// Write files in non-chronological order
+	entries := []models.HistoryEntry{older, newer, middle}
+	filenames := []string{"older.json", "newer.json", "middle.json"}
+
+	for i, entry := range entries {
+		data, _ := json.MarshalIndent(entry, "", "  ")
+		err = os.WriteFile(filepath.Join(tempDir, filenames[i]), data, 0644)
+		if err != nil {
+			t.Fatalf("Failed to create history file %s: %v", filenames[i], err)
+		}
+	}
+
+	handler := NewHistoryHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	history := handler.GetHistory()
+	if len(history) != 3 {
+		t.Fatalf("Expected 3 history entries, got %d", len(history))
+	}
+
+	// Should be sorted newest first
+	if history[0].ID != "newer-entry" {
+		t.Errorf("Expected first entry to be 'newer-entry', got %s", history[0].ID)
+	}
+	if history[1].ID != "middle-entry" {
+		t.Errorf("Expected second entry to be 'middle-entry', got %s", history[1].ID)
+	}
+	if history[2].ID != "older-entry" {
+		t.Errorf("Expected third entry to be 'older-entry', got %s", history[2].ID)
+	}
+}
+
+func TestHistoryHandler_LoadHistoryFileError(t *testing.T) {
+	// Test loadHistoryFile function directly with various error scenarios
+	tempDir, err := os.MkdirTemp("", "history_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewHistoryHandler(tempDir)
+
+	// Test with non-existent file
+	_, err = handler.loadHistoryFile(filepath.Join(tempDir, "nonexistent.json"))
+	if err == nil {
+		t.Error("Expected loadHistoryFile to fail with non-existent file")
+	}
+
+	// Test with invalid JSON
+	invalidFile := filepath.Join(tempDir, "invalid.json")
+	err = os.WriteFile(invalidFile, []byte("{broken json"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid JSON file: %v", err)
+	}
+
+	_, err = handler.loadHistoryFile(invalidFile)
+	if err == nil {
+		t.Error("Expected loadHistoryFile to fail with invalid JSON")
+	}
+
+	// Test with valid JSON
+	validEntry := models.HistoryEntry{
+		ID:          "test-id",
+		Timestamp:   time.Now(),
+		Feature:     "Test Feature",
+		Description: "Test description",
+		Changes:     []models.Change{},
+		Reasoning:   "Test reasoning",
+	}
+	validData, _ := json.MarshalIndent(validEntry, "", "  ")
+	validFile := filepath.Join(tempDir, "valid.json")
+	err = os.WriteFile(validFile, validData, 0644)
+	if err != nil {
+		t.Fatalf("Failed to create valid JSON file: %v", err)
+	}
+
+	entry, err := handler.loadHistoryFile(validFile)
+	if err != nil {
+		t.Fatalf("loadHistoryFile should succeed with valid JSON: %v", err)
+	}
+	if entry.ID != "test-id" {
+		t.Errorf("Expected entry ID 'test-id', got %s", entry.ID)
+	}
+	if entry.FilePath != validFile {
+		t.Errorf("Expected FilePath to be set to %s, got %s", validFile, entry.FilePath)
+	}
+}
+
+func TestHistoryHandler_AddHistoryEntry_FileWriteError(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+
+	// Make the directory read-only to cause write errors
+	err = os.Chmod(historyDir, 0444)
+	require.NoError(t, err)
+	defer os.Chmod(historyDir, 0755) // Restore permissions for cleanup
+
+	// Try to add entry - should fail due to read-only directory
+	changes := []models.Change{
+		{
+			FilePath:   "test.go",
+			ChangeType: "created",
+			Before:     "",
+			After:      "new file content",
+		},
+	}
+
+	err = handler.AddHistoryEntry("test-feature", "Test description", "Test reasoning", changes)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "permission denied")
+}
+
+func TestHistoryHandler_AddHistoryEntry_LongFeatureName(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+
+	// Create entry with very long feature name to test sanitization
+	longFeatureName := strings.Repeat("very-long-feature-name-with-special-chars/\\:*?\"<>|", 10)
+	changes := []models.Change{
+		{
+			FilePath:   "test.go",
+			ChangeType: "created",
+			Before:     "",
+			After:      "new file content",
+		},
+	}
+
+	err = handler.AddHistoryEntry(longFeatureName, "Test description", "Test reasoning", changes)
+	require.NoError(t, err)
+
+	// Verify entry was added to memory
+	history := handler.GetHistory()
+	assert.Len(t, history, 1)
+	assert.Equal(t, longFeatureName, history[0].Feature)
+
+	// Verify file was created with sanitized name
+	files, err := ioutil.ReadDir(historyDir)
+	require.NoError(t, err)
+	assert.Len(t, files, 1)
+
+	// Filename should be sanitized
+	assert.NotContains(t, files[0].Name(), "/")
+	assert.NotContains(t, files[0].Name(), "\\")
+	assert.NotContains(t, files[0].Name(), ":")
+	assert.NotContains(t, files[0].Name(), "*")
+	assert.NotContains(t, files[0].Name(), "?")
+	assert.NotContains(t, files[0].Name(), "\"")
+	assert.NotContains(t, files[0].Name(), "<")
+	assert.NotContains(t, files[0].Name(), ">")
+	assert.NotContains(t, files[0].Name(), "|")
+}
+
+func TestHistoryHandler_AddHistoryEntry_EmptyChanges(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+
+	// Add entry with empty changes
+	var changes []models.Change
+
+	err = handler.AddHistoryEntry("test-feature", "Test description", "Test reasoning", changes)
+	require.NoError(t, err)
+
+	// Verify entry was added
+	history := handler.GetHistory()
+	assert.Len(t, history, 1)
+	assert.Equal(t, "test-feature", history[0].Feature)
+	assert.Empty(t, history[0].Changes)
+}
+
+func TestHistoryHandler_AddHistoryEntry_SpecialCharacters(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+
+	// Add entry with special characters
+	featureName := "test/feature:with*special?chars"
+	description := "Description with \"quotes\" and <tags>"
+	reasoning := "Reasoning with 'single quotes' and unicode: éàñ"
+
+	changes := []models.Change{
+		{
+			FilePath:   "path/with spaces.go",
+			ChangeType: "modified",
+			Before:     "old content",
+			After:      "new content",
+		},
+	}
+
+	err = handler.AddHistoryEntry(featureName, description, reasoning, changes)
+	require.NoError(t, err)
+
+	// Verify entry was added correctly
+	history := handler.GetHistory()
+	assert.Len(t, history, 1)
+	assert.Equal(t, featureName, history[0].Feature)
+	assert.Equal(t, description, history[0].Description)
+	assert.Equal(t, reasoning, history[0].Reasoning)
+	assert.Len(t, history[0].Changes, 1)
+	assert.Equal(t, "modified", history[0].Changes[0].ChangeType)
+	assert.Equal(t, "path/with spaces.go", history[0].Changes[0].FilePath)
+}
+
+func TestHistoryHandler_AddHistoryEntry_SanitizeFilename(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+
+	// Test with feature name that needs sanitization
+	featureName := "test/feature:with*special?chars\"<>|"
+	changes := []models.Change{
+		{
+			FilePath:   "test.go",
+			ChangeType: "created",
+			Before:     "",
+			After:      "new content",
+		},
+	}
+
+	err = handler.AddHistoryEntry(featureName, "Test description", "Test reasoning", changes)
+	require.NoError(t, err)
+
+	// Verify entry was added
+	history := handler.GetHistory()
+	assert.Len(t, history, 1)
+	assert.Equal(t, featureName, history[0].Feature)
+
+	// Verify file was created with sanitized name
+	files, err := ioutil.ReadDir(historyDir)
+	require.NoError(t, err)
+	assert.Len(t, files, 1)
+
+	// Filename should be sanitized (no special chars)
+	filename := files[0].Name()
+	assert.NotContains(t, filename, "/")
+	assert.NotContains(t, filename, ":")
+	assert.NotContains(t, filename, "*")
+	assert.NotContains(t, filename, "?")
+	assert.NotContains(t, filename, "\"")
+	assert.NotContains(t, filename, "<")
+	assert.NotContains(t, filename, ">")
+	assert.NotContains(t, filename, "|")
+	assert.Contains(t, filename, "test")
+	assert.Contains(t, filename, "feature")
+}
+
+func TestHistoryHandler_AddHistoryEntry_JSONMarshalError(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+
+	// Save original marshalIndentFunc
+	originalMarshal := marshalIndentFunc
+	defer func() {
+		marshalIndentFunc = originalMarshal
+	}()
+
+	// Replace with function that returns error
+	marshalIndentFunc = func(v interface{}, prefix, indent string) ([]byte, error) {
+		return nil, fmt.Errorf("mock marshal error")
+	}
+
+	// Try to add entry
+	changes := []models.Change{
+		{
+			FilePath:   "test.go",
+			ChangeType: "created",
+			Before:     "",
+			After:      "new content",
+		},
+	}
+
+	err = handler.AddHistoryEntry("test-feature", "Test description", "Test reasoning", changes)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mock marshal error")
+}
+
+func TestHistoryHandler_GetToolHandler_AddWithOptionalFields(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+	toolHandler := handler.GetToolHandler()
+
+	// Test add action with changes that have optional before/after fields
+	args := map[string]interface{}{
+		"action":      "add",
+		"feature":     "test-feature",
+		"description": "Test description",
+		"reasoning":   "Test reasoning",
+		"changes": []interface{}{
+			map[string]interface{}{
+				"file_path":   "file1.go",
+				"change_type": "modified",
+				"before":      "old content",
+				"after":       "new content",
+			},
+			map[string]interface{}{
+				"file_path":   "file2.go",
+				"change_type": "created",
+				// No before field for created files
+				"after": "new file content",
+			},
+			map[string]interface{}{
+				"file_path":   "file3.go",
+				"change_type": "deleted",
+				"before":      "deleted content",
+				// No after field for deleted files
+			},
+		},
+	}
+
+	ctx := context.Background()
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = args
+	result, err := toolHandler(ctx, request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify the entry was added
+	history := handler.GetHistory()
+	assert.Len(t, history, 1)
+	assert.Equal(t, "test-feature", history[0].Feature)
+	assert.Len(t, history[0].Changes, 3)
+
+	// Verify change details
+	assert.Equal(t, "old content", history[0].Changes[0].Before)
+	assert.Equal(t, "new content", history[0].Changes[0].After)
+	assert.Equal(t, "", history[0].Changes[1].Before)
+	assert.Equal(t, "new file content", history[0].Changes[1].After)
+	assert.Equal(t, "deleted content", history[0].Changes[2].Before)
+	assert.Equal(t, "", history[0].Changes[2].After)
+}
+
+func TestHistoryHandler_GetToolHandler_AddWithInvalidChanges(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+	toolHandler := handler.GetToolHandler()
+
+	// Test add action with invalid change entries
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"action":      "add",
+		"feature":     "test feature",
+		"description": "test description",
+		"reasoning":   "test reasoning",
+		"changes": []interface{}{
+			"invalid string instead of map",
+			123, // invalid number
+			map[string]interface{}{
+				"file_path":   "valid.go",
+				"change_type": "modified",
+			},
+			nil, // nil entry
+		},
+	}
+
+	ctx := context.Background()
+	result, err := toolHandler(ctx, request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should have processed only the valid change
+	entries := handler.GetHistory()
+	require.Len(t, entries, 1)
+	assert.Len(t, entries[0].Changes, 1)
+	assert.Equal(t, "valid.go", entries[0].Changes[0].FilePath)
+}
+
+func TestHistoryHandler_GetToolHandler_SearchMissingQuery(t *testing.T) {
+	tempDir := t.TempDir()
+	historyDir := filepath.Join(tempDir, "history")
+
+	// Create directory
+	err := os.MkdirAll(historyDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewHistoryHandler(historyDir)
+	toolHandler := handler.GetToolHandler()
+
+	// Test search action without query
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"action": "search",
+		// missing query
+	}
+
+	ctx := context.Background()
+	result, err := toolHandler(ctx, request)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "query is required for search action")
+}

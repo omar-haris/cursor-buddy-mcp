@@ -1,0 +1,1035 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/models"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestTodoHandler_Load(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "todo_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test todo file
+	todoContent := `# User Authentication Feature
+
+This feature implements user authentication with JWT tokens.
+
+## Core Components
+- [x] User registration endpoint
+- [ ] Email verification system
+- [x] Password hashing with bcrypt
+- [ ] JWT token generation
+- [ ] Login/logout endpoints
+- [ ] Password reset flow
+
+## Security Requirements
+- [x] Input validation
+- [ ] Rate limiting
+- [ ] CSRF protection
+
+## Testing
+- [ ] Unit tests
+- [ ] Integration tests`
+
+	todoFile := filepath.Join(tempDir, "authentication.md")
+	err = os.WriteFile(todoFile, []byte(todoContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test todo file: %v", err)
+	}
+
+	// Create another todo file
+	todoContent2 := `# API Documentation
+
+Documentation for all API endpoints.
+
+## Endpoints
+- [x] User endpoints documented
+- [ ] Product endpoints documented
+- [ ] Order endpoints documented`
+
+	todoFile2 := filepath.Join(tempDir, "api-docs.md")
+	err = os.WriteFile(todoFile2, []byte(todoContent2), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create second todo file: %v", err)
+	}
+
+	// Test loading todos
+	handler := NewTodoHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load todos: %v", err)
+	}
+
+	todos := handler.GetTodos()
+	if len(todos) != 14 { // Fixed expectation based on actual parsing
+		t.Errorf("Expected 14 todos, got %d", len(todos))
+	}
+
+	// Check specific todo
+	var emailVerificationTodo *models.Todo
+	for _, todo := range todos {
+		if todo.Task == "Email verification system" {
+			emailVerificationTodo = &todo
+			break
+		}
+	}
+
+	if emailVerificationTodo == nil {
+		t.Fatal("Expected to find email verification todo")
+	}
+
+	if emailVerificationTodo.Completed {
+		t.Error("Expected email verification todo to be incomplete")
+	}
+
+	if emailVerificationTodo.Feature != "authentication" { // Fixed expectation based on actual parsing
+		t.Errorf("Expected feature to be 'authentication', got %s", emailVerificationTodo.Feature)
+	}
+}
+
+func TestTodoHandler_GetTodosByFeature(t *testing.T) {
+	handler := NewTodoHandler("")
+
+	// Add test todos
+	handler.todos = []models.Todo{
+		{ID: "1", Feature: "Authentication", Task: "Login", Completed: false},
+		{ID: "2", Feature: "Authentication", Task: "Logout", Completed: true},
+		{ID: "3", Feature: "Dashboard", Task: "Charts", Completed: false},
+		{ID: "4", Feature: "Authentication", Task: "Password Reset", Completed: false},
+	}
+
+	authTodos := handler.GetTodosByFeature("Authentication")
+	if len(authTodos) != 3 {
+		t.Errorf("Expected 3 authentication todos, got %d", len(authTodos))
+	}
+
+	dashboardTodos := handler.GetTodosByFeature("Dashboard")
+	if len(dashboardTodos) != 1 {
+		t.Errorf("Expected 1 dashboard todo, got %d", len(dashboardTodos))
+	}
+
+	nonExistentTodos := handler.GetTodosByFeature("NonExistent")
+	if len(nonExistentTodos) != 0 {
+		t.Errorf("Expected 0 todos for non-existent feature, got %d", len(nonExistentTodos))
+	}
+}
+
+func TestTodoHandler_GetIncompleteTodos(t *testing.T) {
+	handler := NewTodoHandler("")
+
+	// Add test todos
+	handler.todos = []models.Todo{
+		{ID: "1", Feature: "Auth", Task: "Login", Completed: false},
+		{ID: "2", Feature: "Auth", Task: "Logout", Completed: true},
+		{ID: "3", Feature: "Dashboard", Task: "Charts", Completed: false},
+		{ID: "4", Feature: "Dashboard", Task: "Tables", Completed: false},
+	}
+
+	incompleteTodos := handler.GetIncompleteTodos()
+	if len(incompleteTodos) != 3 {
+		t.Errorf("Expected 3 incomplete todos, got %d", len(incompleteTodos))
+	}
+
+	// Verify all returned todos are incomplete
+	for _, todo := range incompleteTodos {
+		if todo.Completed {
+			t.Errorf("Expected todo %s to be incomplete", todo.Task)
+		}
+	}
+}
+
+func TestTodoHandler_UpdateTodoStatus(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "todo_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test todo file
+	todoContent := `# Test Feature
+
+## Tasks
+- [ ] Task 1
+- [ ] Task 2
+- [x] Task 3`
+
+	todoFile := filepath.Join(tempDir, "test.md")
+	err = os.WriteFile(todoFile, []byte(todoContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test todo file: %v", err)
+	}
+
+	handler := NewTodoHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load todos: %v", err)
+	}
+
+	// Find a todo to update
+	todos := handler.GetTodos()
+	var todoToUpdate models.Todo
+	for _, todo := range todos {
+		if todo.Task == "Task 1" && !todo.Completed {
+			todoToUpdate = todo
+			break
+		}
+	}
+
+	if todoToUpdate.ID == "" {
+		t.Fatal("Could not find Task 1 to update")
+	}
+
+	// Update the todo status
+	err = handler.UpdateTodoStatus(todoToUpdate.ID, true)
+	if err != nil {
+		t.Fatalf("Failed to update todo status: %v", err)
+	}
+
+	// Verify the todo was updated
+	updatedTodos := handler.GetTodos()
+	var updatedTodo *models.Todo
+	for _, todo := range updatedTodos {
+		if todo.ID == todoToUpdate.ID {
+			updatedTodo = &todo
+			break
+		}
+	}
+
+	if updatedTodo == nil {
+		t.Fatal("Could not find updated todo")
+	}
+
+	if !updatedTodo.Completed {
+		t.Error("Expected todo to be completed after update")
+	}
+
+	// Verify the file was updated
+	updatedContent, err := os.ReadFile(todoFile)
+	if err != nil {
+		t.Fatalf("Failed to read updated file: %v", err)
+	}
+
+	if !strings.Contains(string(updatedContent), "- [x] Task 1") {
+		t.Error("Expected file to contain completed task")
+	}
+}
+
+func TestTodoHandler_GetProgress(t *testing.T) {
+	handler := NewTodoHandler("")
+
+	// Add test todos
+	handler.todos = []models.Todo{
+		{ID: "1", Feature: "Auth", Task: "Login", Completed: true},
+		{ID: "2", Feature: "Auth", Task: "Logout", Completed: false},
+		{ID: "3", Feature: "Auth", Task: "Register", Completed: true},
+		{ID: "4", Feature: "Dashboard", Task: "Charts", Completed: false},
+		{ID: "5", Feature: "Dashboard", Task: "Tables", Completed: false},
+	}
+
+	// Test overall progress
+	progress := handler.GetProgress()
+
+	// Check total todos
+	total, ok := progress["total"].(int)
+	if !ok || total != 5 {
+		t.Errorf("Expected total to be 5, got %v", progress["total"])
+	}
+
+	// Check completed todos
+	completed, ok := progress["completed"].(int)
+	if !ok || completed != 2 {
+		t.Errorf("Expected completed to be 2, got %v", progress["completed"])
+	}
+
+	// Check percentage
+	percentage, ok := progress["percentage"].(float64)
+	if !ok {
+		t.Errorf("Expected percentage to be float64, got %T", progress["percentage"])
+	} else {
+		expectedPercentage := 40.0 // 2 out of 5 = 40%
+		if percentage != expectedPercentage {
+			t.Errorf("Expected percentage %.2f, got %.2f", expectedPercentage, percentage)
+		}
+	}
+
+	// Check by_feature breakdown
+	byFeature, ok := progress["by_feature"].(map[string]map[string]int)
+	if !ok {
+		t.Errorf("Expected by_feature to be map[string]map[string]int, got %T", progress["by_feature"])
+	} else {
+		// Check Auth feature
+		authStats, exists := byFeature["Auth"]
+		if !exists {
+			t.Error("Expected Auth feature in by_feature breakdown")
+		} else {
+			if authStats["total"] != 3 {
+				t.Errorf("Expected Auth total to be 3, got %d", authStats["total"])
+			}
+			if authStats["completed"] != 2 {
+				t.Errorf("Expected Auth completed to be 2, got %d", authStats["completed"])
+			}
+		}
+
+		// Check Dashboard feature
+		dashboardStats, exists := byFeature["Dashboard"]
+		if !exists {
+			t.Error("Expected Dashboard feature in by_feature breakdown")
+		} else {
+			if dashboardStats["total"] != 2 {
+				t.Errorf("Expected Dashboard total to be 2, got %d", dashboardStats["total"])
+			}
+			if dashboardStats["completed"] != 0 {
+				t.Errorf("Expected Dashboard completed to be 0, got %d", dashboardStats["completed"])
+			}
+		}
+	}
+}
+
+func TestTodoHandler_GetToolHandler(t *testing.T) {
+	handler := NewTodoHandler("")
+
+	// Add test todos
+	handler.todos = []models.Todo{
+		{ID: "1", Feature: "Auth", Task: "Login", Completed: false},
+	}
+
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected tool handler, got nil")
+	}
+}
+
+func TestTodoHandler_GetToolHandlerComprehensive(t *testing.T) {
+	// Create a temporary directory
+	tempDir, err := os.MkdirTemp("", "todo_tool_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a handler with test data and a valid file system
+	now := time.Now()
+
+	// Create necessary directories
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directory structure: %v", err)
+	}
+
+	// Write a test todo file
+	todoFilePath := filepath.Join(tempDir, "todos.json")
+	testTodos := []models.Todo{
+		{
+			ID:        "todo-1",
+			Feature:   "search",
+			Task:      "Implement search functionality",
+			Completed: false,
+			UpdatedAt: now.Add(-24 * time.Hour),
+			FilePath:  todoFilePath,
+		},
+		{
+			ID:        "todo-2",
+			Feature:   "auth",
+			Task:      "Add user authentication",
+			Completed: true,
+			UpdatedAt: now,
+			FilePath:  todoFilePath,
+		},
+		{
+			ID:        "todo-3",
+			Feature:   "search",
+			Task:      "Add search results pagination",
+			Completed: false,
+			UpdatedAt: now,
+			FilePath:  todoFilePath,
+		},
+	}
+
+	todoJSON, err := json.Marshal(testTodos)
+	if err != nil {
+		t.Fatalf("Failed to marshal test todos: %v", err)
+	}
+
+	if err := os.WriteFile(todoFilePath, todoJSON, 0644); err != nil {
+		t.Fatalf("Failed to write test todo file: %v", err)
+	}
+
+	// Create the handler with the test data
+	handler := &TodoHandler{
+		path:  tempDir,
+		todos: testTodos,
+	}
+
+	// Get the tool handler
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected non-nil tool handler")
+	}
+
+	// Create test context
+	ctx := context.Background()
+
+	// Test list action
+	listRequest := mcp.CallToolRequest{}
+	listRequest.Params.Arguments = map[string]interface{}{
+		"action": "list",
+	}
+
+	listResult, err := toolHandler(ctx, listRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for list action: %v", err)
+	}
+	if listResult == nil {
+		t.Fatal("Expected non-nil result for list action")
+	}
+
+	// Test list action with feature filter
+	listFeatureRequest := mcp.CallToolRequest{}
+	listFeatureRequest.Params.Arguments = map[string]interface{}{
+		"action":  "list",
+		"feature": "search",
+	}
+
+	listFeatureResult, err := toolHandler(ctx, listFeatureRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for list with feature filter: %v", err)
+	}
+	if listFeatureResult == nil {
+		t.Fatal("Expected non-nil result for list with feature filter")
+	}
+
+	// Test list action with only_incomplete flag
+	incompleteRequest := mcp.CallToolRequest{}
+	incompleteRequest.Params.Arguments = map[string]interface{}{
+		"action":          "list",
+		"only_incomplete": true,
+	}
+
+	incompleteResult, err := toolHandler(ctx, incompleteRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for list with only_incomplete flag: %v", err)
+	}
+	if incompleteResult == nil {
+		t.Fatal("Expected non-nil result for list with only_incomplete flag")
+	}
+
+	// Test update action (should return error without required args)
+	updateRequest := mcp.CallToolRequest{}
+	updateRequest.Params.Arguments = map[string]interface{}{
+		"action": "update",
+		// Missing required arguments
+	}
+
+	updateResult, err := toolHandler(ctx, updateRequest)
+	if err == nil {
+		// If no error was returned, the result should indicate an error
+		if updateResult != nil && !updateResult.IsError {
+			t.Error("Expected error result for update action with missing args")
+		}
+	}
+
+	// Test update action with all required args
+	updateCompleteRequest := mcp.CallToolRequest{}
+	updateCompleteRequest.Params.Arguments = map[string]interface{}{
+		"action":    "update",
+		"todo_id":   "todo-3",
+		"completed": true,
+	}
+
+	updateCompleteResult, err := toolHandler(ctx, updateCompleteRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for complete update action: %v", err)
+	}
+	if updateCompleteResult == nil {
+		t.Fatal("Expected non-nil result for complete update action")
+	}
+
+	// Test update action with non-existent todo
+	nonExistentUpdateRequest := mcp.CallToolRequest{}
+	nonExistentUpdateRequest.Params.Arguments = map[string]interface{}{
+		"action":    "update",
+		"todo_id":   "non-existent",
+		"completed": true,
+	}
+
+	nonExistentUpdateResult, err := toolHandler(ctx, nonExistentUpdateRequest)
+	if err == nil {
+		// If no error was returned, the result should indicate an error
+		if nonExistentUpdateResult != nil && !nonExistentUpdateResult.IsError {
+			t.Error("Expected error result for update action with non-existent todo")
+		}
+	}
+
+	// Test progress action
+	progressRequest := mcp.CallToolRequest{}
+	progressRequest.Params.Arguments = map[string]interface{}{
+		"action": "progress",
+	}
+
+	progressResult, err := toolHandler(ctx, progressRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for progress action: %v", err)
+	}
+	if progressResult == nil {
+		t.Fatal("Expected non-nil result for progress action")
+	}
+
+	// Test progress action with feature filter
+	progressFeatureRequest := mcp.CallToolRequest{}
+	progressFeatureRequest.Params.Arguments = map[string]interface{}{
+		"action":  "progress",
+		"feature": "search",
+	}
+
+	progressFeatureResult, err := toolHandler(ctx, progressFeatureRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for progress with feature filter: %v", err)
+	}
+	if progressFeatureResult == nil {
+		t.Fatal("Expected non-nil result for progress with feature filter")
+	}
+
+	// Test invalid action
+	invalidRequest := mcp.CallToolRequest{}
+	invalidRequest.Params.Arguments = map[string]interface{}{
+		"action": "invalid_action",
+	}
+
+	invalidResult, err := toolHandler(ctx, invalidRequest)
+	if err == nil {
+		// If no error was returned, the result should indicate an error
+		if invalidResult != nil && !invalidResult.IsError {
+			t.Error("Expected error result for invalid action")
+		}
+	}
+
+	// Test missing action
+	missingActionRequest := mcp.CallToolRequest{}
+	// No action parameter
+
+	missingActionResult, err := toolHandler(ctx, missingActionRequest)
+	if err == nil {
+		// If no error was returned, the result should indicate an error
+		if missingActionResult != nil && !missingActionResult.IsError {
+			t.Error("Expected error result for missing action")
+		}
+	}
+}
+
+func TestTodoHandler_LoadNonExistentDirectory(t *testing.T) {
+	handler := NewTodoHandler("/non/existent/path")
+	err := handler.Load()
+
+	// Should not error when directory doesn't exist
+	if err != nil {
+		t.Errorf("Expected no error for non-existent directory, got: %v", err)
+	}
+
+	todos := handler.GetTodos()
+	if len(todos) != 0 {
+		t.Errorf("Expected 0 todos for non-existent directory, got %d", len(todos))
+	}
+}
+
+func TestTodoHandler_LoadInvalidFile(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "todo_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create invalid file (not markdown)
+	invalidFile := filepath.Join(tempDir, "invalid.txt")
+	err = os.WriteFile(invalidFile, []byte("invalid content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid file: %v", err)
+	}
+
+	// Test loading todos - should skip invalid files
+	handler := NewTodoHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load todos: %v", err)
+	}
+
+	todos := handler.GetTodos()
+	if len(todos) != 0 {
+		t.Errorf("Expected 0 todos (invalid file should be skipped), got %d", len(todos))
+	}
+}
+
+func TestTodoHandler_ConcurrentAccess(t *testing.T) {
+	handler := NewTodoHandler("")
+
+	// Add test todos
+	handler.todos = []models.Todo{
+		{ID: "1", Feature: "Auth", Task: "Login", Completed: false},
+	}
+
+	// Test concurrent read access
+	done := make(chan bool, 2)
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			todos := handler.GetTodos()
+			if len(todos) != 1 {
+				t.Errorf("Concurrent read failed: expected 1 todo, got %d", len(todos))
+			}
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			progress := handler.GetProgress()
+			percentage, ok := progress["percentage"].(float64)
+			if !ok || percentage < 0 || percentage > 100 {
+				t.Errorf("Concurrent progress read failed: got invalid progress %v", progress["percentage"])
+			}
+		}
+		done <- true
+	}()
+
+	// Wait for both goroutines to complete
+	<-done
+	<-done
+}
+
+func TestTodoHandler_UpdateTodoStatusAdvancedCases(t *testing.T) {
+	// Test UpdateTodoStatus with various edge cases
+	tempDir, err := os.MkdirTemp("", "todo_update_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a real markdown file with todos
+	todoFile := filepath.Join(tempDir, "feature1.md")
+	todoContent := `# Feature: TestFeature
+
+- [ ] Task 1 not completed
+- [x] Task 2 completed
+- [ ] Task 3 not completed
+`
+	err = os.WriteFile(todoFile, []byte(todoContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create todo file: %v", err)
+	}
+
+	handler := NewTodoHandler(tempDir)
+
+	// Load todos from file
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load todos: %v", err)
+	}
+
+	todos := handler.GetTodos()
+	if len(todos) != 3 {
+		t.Fatalf("Expected 3 todos, got %d", len(todos))
+	}
+
+	// Test updating non-existent todo
+	err = handler.UpdateTodoStatus("nonexistent", true)
+	if err == nil {
+		t.Error("Expected error when updating non-existent todo")
+	}
+	if !strings.Contains(err.Error(), "todo with ID") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Expected 'not found' error, got: %v", err)
+	}
+
+	// Find a todo that's not completed and update it
+	var uncompletedTodo *models.Todo
+	for _, todo := range todos {
+		if !todo.Completed {
+			uncompletedTodo = &todo
+			break
+		}
+	}
+	if uncompletedTodo == nil {
+		t.Fatal("No uncompleted todo found")
+	}
+
+	// Test updating existing todo from false to true
+	err = handler.UpdateTodoStatus(uncompletedTodo.ID, true)
+	if err != nil {
+		t.Fatalf("Failed to update todo: %v", err)
+	}
+
+	// Verify file was updated
+	updatedContent, err := os.ReadFile(todoFile)
+	if err != nil {
+		t.Fatalf("Failed to read updated file: %v", err)
+	}
+	if !strings.Contains(string(updatedContent), "- [x]") {
+		t.Error("File should contain completed checkbox after update")
+	}
+
+	// Find a completed todo and update it to false
+	var completedTodo *models.Todo
+	for _, todo := range todos {
+		if todo.Completed {
+			completedTodo = &todo
+			break
+		}
+	}
+	if completedTodo != nil {
+		err = handler.UpdateTodoStatus(completedTodo.ID, false)
+		if err != nil {
+			t.Fatalf("Failed to update completed todo: %v", err)
+		}
+
+		// Verify file was updated
+		updatedContent, err = os.ReadFile(todoFile)
+		if err != nil {
+			t.Fatalf("Failed to read updated file: %v", err)
+		}
+		// Should have at least one unchecked box
+		if !strings.Contains(string(updatedContent), "- [ ]") {
+			t.Error("File should contain unchecked checkbox after update")
+		}
+	}
+}
+
+func TestTodoHandler_LoadTodoFileErrorCases(t *testing.T) {
+	// Test loadTodoFile with various error scenarios
+	tempDir, err := os.MkdirTemp("", "todo_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewTodoHandler(tempDir)
+
+	// Test with non-existent file
+	_, err = handler.loadTodoFile(filepath.Join(tempDir, "nonexistent.md"))
+	if err == nil {
+		t.Error("Expected error with non-existent file")
+	}
+
+	// Test with empty file
+	emptyFile := filepath.Join(tempDir, "empty.md")
+	err = os.WriteFile(emptyFile, []byte(""), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create empty file: %v", err)
+	}
+
+	todos, err := handler.loadTodoFile(emptyFile)
+	if err != nil {
+		t.Fatalf("loadTodoFile should handle empty file: %v", err)
+	}
+	if len(todos) != 0 {
+		t.Errorf("Expected empty todos array with empty file, got %d", len(todos))
+	}
+
+	// Test with file containing no todos
+	noTodosFile := filepath.Join(tempDir, "no_todos.md")
+	err = os.WriteFile(noTodosFile, []byte("# No todos here\nJust some text"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create no todos file: %v", err)
+	}
+
+	todos, err = handler.loadTodoFile(noTodosFile)
+	if err != nil {
+		t.Fatalf("loadTodoFile should handle file with no todos: %v", err)
+	}
+	if len(todos) != 0 {
+		t.Errorf("Expected empty todos array with no todos, got %d", len(todos))
+	}
+
+	// Test with valid todos
+	validTodosFile := filepath.Join(tempDir, "valid_todos.md")
+	validContent := `# Feature: TestFeature
+
+Some description
+
+- [ ] Task 1
+- [x] Task 2 completed
+- [ ] Another task
+
+More text here
+`
+	err = os.WriteFile(validTodosFile, []byte(validContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create valid todos file: %v", err)
+	}
+
+	todos, err = handler.loadTodoFile(validTodosFile)
+	if err != nil {
+		t.Fatalf("loadTodoFile should succeed with valid todos: %v", err)
+	}
+	if len(todos) != 3 {
+		t.Errorf("Expected 3 todos, got %d", len(todos))
+	}
+
+	// Verify todo details
+	if todos[0].Feature != "TestFeature" {
+		t.Errorf("Expected feature 'TestFeature', got %s", todos[0].Feature)
+	}
+	if todos[0].Completed {
+		t.Error("First todo should not be completed")
+	}
+	if !todos[1].Completed {
+		t.Error("Second todo should be completed")
+	}
+	if todos[1].Task != "Task 2 completed" {
+		t.Errorf("Expected task 'Task 2 completed', got %s", todos[1].Task)
+	}
+}
+
+func TestTodoHandler_UpdateTodoStatus_FileReadError(t *testing.T) {
+	tempDir := t.TempDir()
+	todosDir := filepath.Join(tempDir, "todos")
+
+	// Create directory
+	err := os.MkdirAll(todosDir, 0755)
+	require.NoError(t, err)
+
+	// Create test todo file
+	todoFile := filepath.Join(todosDir, "test.md")
+	todoContent := `# Test Feature
+
+- [ ] incomplete task
+- [x] completed task`
+	err = ioutil.WriteFile(todoFile, []byte(todoContent), 0644)
+	require.NoError(t, err)
+
+	// Create handler and load
+	handler := NewTodoHandler(todosDir)
+	err = handler.Load()
+	require.NoError(t, err)
+
+	// Get the actual todo ID
+	todos := handler.GetTodos()
+	require.Greater(t, len(todos), 0)
+	todoID := todos[0].ID
+
+	// Remove the file to cause read error
+	err = os.Remove(todoFile)
+	require.NoError(t, err)
+
+	// Try to update status - should fail due to missing file
+	err = handler.UpdateTodoStatus(todoID, true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no such file or directory")
+}
+
+func TestTodoHandler_UpdateTodoStatus_FileWriteError(t *testing.T) {
+	tempDir := t.TempDir()
+	todosDir := filepath.Join(tempDir, "todos")
+
+	// Create directory
+	err := os.MkdirAll(todosDir, 0755)
+	require.NoError(t, err)
+
+	// Create test todo file
+	todoFile := filepath.Join(todosDir, "test.md")
+	todoContent := `# Test Feature
+
+- [ ] incomplete task
+- [x] completed task`
+	err = ioutil.WriteFile(todoFile, []byte(todoContent), 0644)
+	require.NoError(t, err)
+
+	// Create handler and load
+	handler := NewTodoHandler(todosDir)
+	err = handler.Load()
+	require.NoError(t, err)
+
+	// Get the actual todo ID
+	todos := handler.GetTodos()
+	require.Greater(t, len(todos), 0)
+	todoID := todos[0].ID
+
+	// Make file read-only to cause write error
+	err = os.Chmod(todoFile, 0444)
+	require.NoError(t, err)
+	defer os.Chmod(todoFile, 0644) // Restore permissions for cleanup
+
+	// Try to update status - should fail due to read-only file
+	err = handler.UpdateTodoStatus(todoID, true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "permission denied")
+}
+
+func TestTodoHandler_UpdateTodoStatus_InvalidLineNumber(t *testing.T) {
+	tempDir := t.TempDir()
+	todosDir := filepath.Join(tempDir, "todos")
+
+	// Create directory
+	err := os.MkdirAll(todosDir, 0755)
+	require.NoError(t, err)
+
+	// Create test todo file
+	todoFile := filepath.Join(todosDir, "test.md")
+	todoContent := `# Test Feature
+
+- [ ] incomplete task`
+	err = ioutil.WriteFile(todoFile, []byte(todoContent), 0644)
+	require.NoError(t, err)
+
+	// Create handler and load
+	handler := NewTodoHandler(todosDir)
+	err = handler.Load()
+	require.NoError(t, err)
+
+	// Manually create a todo with invalid line number
+	handler.todos = append(handler.todos, models.Todo{
+		ID:         "test-invalid",
+		Feature:    "test",
+		Task:       "invalid line number task",
+		Completed:  false,
+		FilePath:   todoFile,
+		LineNumber: 999, // Invalid line number
+	})
+
+	// Try to update status - should not crash even with invalid line number
+	err = handler.UpdateTodoStatus("test-invalid", true)
+	require.NoError(t, err)
+
+	// Verify the in-memory todo was updated even though file wasn't changed
+	todos := handler.GetTodos()
+	found := false
+	for _, todo := range todos {
+		if todo.ID == "test-invalid" {
+			assert.True(t, todo.Completed)
+			found = true
+			break
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestTodoHandler_UpdateTodoStatus_MarkIncompleteFromCompleted(t *testing.T) {
+	tempDir := t.TempDir()
+	todosDir := filepath.Join(tempDir, "todos")
+
+	// Create directory
+	err := os.MkdirAll(todosDir, 0755)
+	require.NoError(t, err)
+
+	// Create test todo file with uppercase X
+	todoFile := filepath.Join(todosDir, "test.md")
+	todoContent := `# Test Feature
+
+- [X] uppercase completed task
+- [x] lowercase completed task`
+	err = ioutil.WriteFile(todoFile, []byte(todoContent), 0644)
+	require.NoError(t, err)
+
+	// Create handler and load
+	handler := NewTodoHandler(todosDir)
+	err = handler.Load()
+	require.NoError(t, err)
+
+	// Get the actual todo IDs
+	todos := handler.GetTodos()
+	require.Len(t, todos, 2)
+
+	var uppercaseID, lowercaseID string
+	for _, todo := range todos {
+		if strings.Contains(todo.Task, "uppercase") {
+			uppercaseID = todo.ID
+		} else if strings.Contains(todo.Task, "lowercase") {
+			lowercaseID = todo.ID
+		}
+	}
+
+	// Update uppercase completed task to incomplete
+	err = handler.UpdateTodoStatus(uppercaseID, false)
+	require.NoError(t, err)
+
+	// Update lowercase completed task to incomplete
+	err = handler.UpdateTodoStatus(lowercaseID, false)
+	require.NoError(t, err)
+
+	// Verify file content was updated
+	updatedContent, err := ioutil.ReadFile(todoFile)
+	require.NoError(t, err)
+
+	contentStr := string(updatedContent)
+	assert.Contains(t, contentStr, "- [ ] uppercase completed task")
+	assert.Contains(t, contentStr, "- [ ] lowercase completed task")
+	assert.NotContains(t, contentStr, "- [X]")
+	assert.NotContains(t, contentStr, "- [x]")
+
+	// Verify in-memory todos were updated
+	updatedTodos := handler.GetTodos()
+	for _, todo := range updatedTodos {
+		if todo.ID == uppercaseID || todo.ID == lowercaseID {
+			assert.False(t, todo.Completed)
+		}
+	}
+}
+
+func TestTodoHandler_UpdateTodoStatus_EmptyFilePath(t *testing.T) {
+	tempDir := t.TempDir()
+	todosDir := filepath.Join(tempDir, "todos")
+
+	// Create directory
+	err := os.MkdirAll(todosDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewTodoHandler(todosDir)
+
+	// Manually add a todo with empty file path
+	handler.todos = []models.Todo{
+		{
+			ID:         "test-empty-path",
+			Feature:    "test",
+			Task:       "task with empty path",
+			Completed:  false,
+			FilePath:   "", // Empty file path
+			LineNumber: 1,
+		},
+	}
+
+	// Try to update status - should fail due to empty file path
+	err = handler.UpdateTodoStatus("test-empty-path", true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no such file or directory")
+}
+
+func TestTodoHandler_GetToolHandler_UpdateError(t *testing.T) {
+	tempDir := t.TempDir()
+	todosDir := filepath.Join(tempDir, "todos")
+
+	// Create directory
+	err := os.MkdirAll(todosDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler (no todos loaded)
+	handler := NewTodoHandler(todosDir)
+	toolHandler := handler.GetToolHandler()
+
+	// Test update action with non-existent todo
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"action":    "update",
+		"todo_id":   "non-existent-id",
+		"completed": true,
+	}
+
+	ctx := context.Background()
+	result, err := toolHandler(ctx, request)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}

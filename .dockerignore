@@ -1,0 +1,79 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE and Editor files
+.vscode/
+.cursor/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Development and testing
+*_test.go
+**/*_test.go
+test-*
+*.test
+coverage.out
+.coverage/
+
+# Documentation
+README.md
+LICENSE
+*.md
+!Dockerfile
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+buddy-mcp
+/buddy-mcp
+
+# Go specific
+vendor/
+*.mod.backup
+*.sum.backup
+
+# Docker
+docker-compose.yml
+Dockerfile*
+!Dockerfile
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Sample data (but keep the structure)
+.buddy/
+!.buddy/
+.buddy/**/*
+!.buddy/**/
+!.buddy/**/.gitkeep
+
+# CI/CD
+.github/
+.travis.yml
+.circleci/
+
+# Other
+node_modules/
+*.orig 

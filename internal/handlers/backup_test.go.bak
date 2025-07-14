@@ -1,0 +1,1284 @@
+package handlers
+
+import (
+	"context"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/models"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/search"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// mockSearchManager creates a mock search manager for testing
+func mockSearchManager(t *testing.T) *search.SearchManager {
+	tempDir := t.TempDir()
+	sm, err := search.NewSearchManager(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create mock search manager: %v", err)
+	}
+	return sm
+}
+
+func TestBackupHandler_Load(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test backup file
+	originalFile := filepath.Join(tempDir, "test.go")
+	originalContent := `package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, World!")
+}`
+
+	err = os.WriteFile(originalFile, []byte(originalContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create original file: %v", err)
+	}
+
+	// Create backup directory and backup file
+	backupDir := filepath.Join(tempDir, "backups")
+	err = os.MkdirAll(backupDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create backup dir: %v", err)
+	}
+
+	// Create a mock search manager for testing
+	mockSearchManager := &search.SearchManager{}
+
+	handler := NewBackupHandler(backupDir, mockSearchManager)
+
+	// Create a backup
+	backup, err := handler.CreateBackup(originalFile, "Before refactoring", "Safety backup")
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+	if backup == nil {
+		t.Fatal("Expected backup to be returned")
+	}
+
+	// Test loading backups
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load backups: %v", err)
+	}
+
+	backups := handler.ListBackups(originalFile)
+	if len(backups) != 1 {
+		t.Errorf("Expected 1 backup, got %d", len(backups))
+	}
+
+	if backups[0].OriginalPath != originalFile {
+		t.Errorf("Expected original path to be %s, got %s", originalFile, backups[0].OriginalPath)
+	}
+
+	if backups[0].ChangeContext != "Before refactoring" {
+		t.Errorf("Expected change context to be 'Before refactoring', got %s", backups[0].ChangeContext)
+	}
+}
+
+func TestBackupHandler_CreateBackup(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test file to backup
+	originalFile := filepath.Join(tempDir, "source.txt")
+	originalContent := "This is the original content."
+
+	err = os.WriteFile(originalFile, []byte(originalContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create original file: %v", err)
+	}
+
+	// Create backup directory
+	backupDir := filepath.Join(tempDir, "backups")
+	err = os.MkdirAll(backupDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create backup dir: %v", err)
+	}
+
+	// Create a mock search manager for testing
+	mockSearchManager := &search.SearchManager{}
+
+	handler := NewBackupHandler(backupDir, mockSearchManager)
+
+	// Create backup
+	backup, err := handler.CreateBackup(originalFile, "Test backup", "Unit test")
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+	if backup == nil {
+		t.Fatal("Expected backup to be returned")
+	}
+
+	// Verify backup was created
+	backups := handler.ListBackups(originalFile)
+	if len(backups) != 1 {
+		t.Errorf("Expected 1 backup after creation, got %d", len(backups))
+	}
+
+	if backups[0].OriginalPath != originalFile {
+		t.Errorf("Expected original path to be %s, got %s", originalFile, backups[0].OriginalPath)
+	}
+
+	// Verify backup file exists and has correct content
+	if _, err := os.Stat(backup.BackupPath); os.IsNotExist(err) {
+		t.Errorf("Backup file does not exist: %s", backup.BackupPath)
+	}
+
+	backupContent, err := os.ReadFile(backup.BackupPath)
+	if err != nil {
+		t.Fatalf("Failed to read backup file: %v", err)
+	}
+
+	if string(backupContent) != originalContent {
+		t.Errorf("Backup content does not match original. Expected: %s, Got: %s", originalContent, string(backupContent))
+	}
+}
+
+func TestBackupHandler_RestoreBackup(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create original file
+	originalFile := filepath.Join(tempDir, "test.txt")
+	originalContent := "Original content"
+
+	err = os.WriteFile(originalFile, []byte(originalContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create original file: %v", err)
+	}
+
+	// Create backup directory
+	backupDir := filepath.Join(tempDir, "backups")
+	err = os.MkdirAll(backupDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create backup dir: %v", err)
+	}
+
+	handler := NewBackupHandler(backupDir, mockSearchManager(t))
+
+	// Create backup
+	backup, err := handler.CreateBackup(originalFile, "Before changes", "Safety")
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+
+	// Modify original file
+	modifiedContent := "Modified content"
+	err = os.WriteFile(originalFile, []byte(modifiedContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to modify original file: %v", err)
+	}
+
+	// Restore from backup
+	backups := handler.GetBackups()
+	if len(backups) == 0 {
+		t.Fatal("No backups found")
+	}
+
+	err = handler.RestoreBackup(backups[0].ID)
+	if err != nil {
+		t.Fatalf("Failed to restore backup: %v", err)
+	}
+
+	// Verify file was restored
+	restoredContent, err := os.ReadFile(originalFile)
+	if err != nil {
+		t.Fatalf("Failed to read restored file: %v", err)
+	}
+
+	if string(restoredContent) != originalContent {
+		t.Errorf("Restored content does not match original. Expected: %s, Got: %s", originalContent, string(restoredContent))
+	}
+}
+
+func TestBackupHandler_GetBackupsByFile(t *testing.T) {
+	handler := NewBackupHandler("")
+
+	// Add test backups
+	handler.backups = []models.Backup{
+		{ID: "1", OriginalPath: "/path/to/file1.go", ChangeContext: "Backup 1"},
+		{ID: "2", OriginalPath: "/path/to/file2.go", ChangeContext: "Backup 2"},
+		{ID: "3", OriginalPath: "/path/to/file1.go", ChangeContext: "Backup 3"},
+		{ID: "4", OriginalPath: "/path/to/file3.go", ChangeContext: "Backup 4"},
+	}
+
+	file1Backups := handler.GetBackupsByFile("/path/to/file1.go")
+	if len(file1Backups) != 2 {
+		t.Errorf("Expected 2 backups for file1.go, got %d", len(file1Backups))
+	}
+
+	file2Backups := handler.GetBackupsByFile("/path/to/file2.go")
+	if len(file2Backups) != 1 {
+		t.Errorf("Expected 1 backup for file2.go, got %d", len(file2Backups))
+	}
+
+	nonExistentBackups := handler.GetBackupsByFile("/nonexistent/file.go")
+	if len(nonExistentBackups) != 0 {
+		t.Errorf("Expected 0 backups for non-existent file, got %d", len(nonExistentBackups))
+	}
+}
+
+func TestBackupHandler_CleanOldBackups(t *testing.T) {
+	handler := NewBackupHandler("")
+
+	// Add test backups with different timestamps
+	now := time.Now()
+	handler.backups = []models.Backup{
+		{ID: "1", OriginalPath: "/file1.go", Timestamp: now.Add(-10 * 24 * time.Hour)}, // 10 days old
+		{ID: "2", OriginalPath: "/file2.go", Timestamp: now.Add(-5 * 24 * time.Hour)},  // 5 days old
+		{ID: "3", OriginalPath: "/file3.go", Timestamp: now.Add(-15 * 24 * time.Hour)}, // 15 days old
+		{ID: "4", OriginalPath: "/file4.go", Timestamp: now.Add(-1 * 24 * time.Hour)},  // 1 day old
+	}
+
+	// Clean backups older than 7 days
+	removed, err := handler.CleanOldBackups(7 * 24 * time.Hour)
+	if err != nil {
+		t.Fatalf("Failed to clean old backups: %v", err)
+	}
+
+	// Should have removed 2 backups (10 days and 15 days old)
+	if removed != 2 {
+		t.Errorf("Expected 2 backups to be removed, got %d", removed)
+	}
+
+	// Should have 2 backups remaining (5 days and 1 day old)
+	remainingBackups := handler.GetBackups()
+	if len(remainingBackups) != 2 {
+		t.Errorf("Expected 2 backups remaining after cleanup, got %d", len(remainingBackups))
+	}
+
+	// Verify correct backups remain
+	remainingIDs := make(map[string]bool)
+	for _, backup := range remainingBackups {
+		remainingIDs[backup.ID] = true
+	}
+
+	if !remainingIDs["2"] || !remainingIDs["4"] {
+		t.Error("Expected backups with IDs '2' and '4' to remain")
+	}
+}
+
+func TestBackupHandler_GetToolHandler(t *testing.T) {
+	// Create a backup handler with a mock backup
+	handler := &BackupHandler{
+		path: "/test/path",
+		backups: []models.Backup{
+			{
+				ID:            "test-backup-1",
+				OriginalPath:  "/path/to/file.go",
+				BackupPath:    "/backups/file.go.backup",
+				Timestamp:     time.Now(),
+				ChangeContext: "Test context",
+				Reasoning:     "Test reasoning",
+			},
+		},
+	}
+
+	// Get the tool handler function
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected non-nil tool handler")
+	}
+
+	// Create a test context
+	ctx := context.Background()
+
+	// Test with action=list
+	listRequest := mcp.CallToolRequest{}
+	listRequest.Params.Arguments = map[string]interface{}{
+		"action": "list",
+	}
+
+	listResult, err := toolHandler(ctx, listRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for list action: %v", err)
+	}
+
+	if listResult == nil {
+		t.Fatal("Expected non-nil result for list action")
+	}
+
+	// Test with action=create (should return error without required args)
+	createRequest := mcp.CallToolRequest{}
+	createRequest.Params.Arguments = map[string]interface{}{
+		"action": "create",
+		// Missing required args
+	}
+
+	createResult, err := toolHandler(ctx, createRequest)
+	if err == nil {
+		// If no error was returned, check that the result contains an error message
+		if createResult == nil {
+			t.Fatal("Expected non-nil result for create action with missing args")
+		}
+
+		// We can't check the content of the error message directly
+		// but we can check if IsError is set
+		if !createResult.IsError {
+			t.Error("Expected isError to be true for create action with missing args")
+		}
+	}
+
+	// Test with action=restore (should return error without required args)
+	restoreRequest := mcp.CallToolRequest{}
+	restoreRequest.Params.Arguments = map[string]interface{}{
+		"action": "restore",
+		// Missing backup_id
+	}
+
+	restoreResult, err := toolHandler(ctx, restoreRequest)
+	if err == nil {
+		// If no error was returned, check that the result contains an error message
+		if restoreResult == nil {
+			t.Fatal("Expected non-nil result for restore action with missing args")
+		}
+
+		if !restoreResult.IsError {
+			t.Error("Expected isError to be true for restore action with missing args")
+		}
+	}
+
+	// Test with action=clean (should return error without required args)
+	cleanRequest := mcp.CallToolRequest{}
+	cleanRequest.Params.Arguments = map[string]interface{}{
+		"action": "clean",
+		// Missing max_age_days
+	}
+
+	cleanResult, err := toolHandler(ctx, cleanRequest)
+	if err == nil {
+		// If no error was returned, check that the result contains an error message
+		if cleanResult == nil {
+			t.Fatal("Expected non-nil result for clean action with missing args")
+		}
+
+		if !cleanResult.IsError {
+			t.Error("Expected isError to be true for clean action with missing args")
+		}
+	}
+
+	// Test with invalid action
+	invalidRequest := mcp.CallToolRequest{}
+	invalidRequest.Params.Arguments = map[string]interface{}{
+		"action": "invalid_action",
+	}
+
+	invalidResult, err := toolHandler(ctx, invalidRequest)
+	if err == nil {
+		// If no error was returned, check that the result is marked as an error
+		if invalidResult == nil {
+			t.Fatal("Expected non-nil result for invalid action")
+		}
+
+		if !invalidResult.IsError {
+			t.Error("Expected isError to be true for invalid action")
+		}
+	}
+}
+
+func TestBackupHandler_GetToolHandlerComprehensive(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "backup_tool_handler_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a real backup handler with temp directory
+	handler := NewBackupHandler(tempDir)
+	toolHandler := handler.GetToolHandler()
+	ctx := context.Background()
+
+	// Test 1: Missing action parameter
+	t.Run("MissingAction", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			// No action parameter
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when action is missing")
+		} else if !strings.Contains(err.Error(), "action is required") {
+			t.Errorf("Expected 'action is required' error, got: %v", err)
+		}
+	})
+
+	// Test 2: List with file_path parameter
+	t.Run("ListWithFilePath", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":    "list",
+			"file_path": "/some/specific/file.go",
+		}
+
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Unexpected error for list with file_path: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result for list with file_path")
+		}
+	})
+
+	// Test 3: Create with missing file_path
+	t.Run("CreateMissingFilePath", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":    "create",
+			"context":   "test context",
+			"reasoning": "test reasoning",
+			// Missing file_path
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when file_path is missing for create")
+		} else if !strings.Contains(err.Error(), "file_path is required") {
+			t.Errorf("Expected 'file_path is required' error, got: %v", err)
+		}
+	})
+
+	// Test 4: Create with missing context
+	t.Run("CreateMissingContext", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":    "create",
+			"file_path": "/test/file.go",
+			"reasoning": "test reasoning",
+			// Missing context
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when context is missing for create")
+		} else if !strings.Contains(err.Error(), "context is required") {
+			t.Errorf("Expected 'context is required' error, got: %v", err)
+		}
+	})
+
+	// Test 5: Create with missing reasoning
+	t.Run("CreateMissingReasoning", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":    "create",
+			"file_path": "/test/file.go",
+			"context":   "test context",
+			// Missing reasoning
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when reasoning is missing for create")
+		} else if !strings.Contains(err.Error(), "reasoning is required") {
+			t.Errorf("Expected 'reasoning is required' error, got: %v", err)
+		}
+	})
+
+	// Test 6: Create with valid parameters (will fail because file doesn't exist)
+	t.Run("CreateValidParams", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":    "create",
+			"file_path": "/nonexistent/file.go",
+			"context":   "test context",
+			"reasoning": "test reasoning",
+		}
+
+		_, err := toolHandler(ctx, request)
+		// Should return an error because file doesn't exist
+		if err == nil {
+			t.Error("Expected error when trying to backup non-existent file")
+		}
+	})
+
+	// Test 7: Restore with missing backup_id
+	t.Run("RestoreMissingBackupId", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "restore",
+			// Missing backup_id
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when backup_id is missing for restore")
+		} else if !strings.Contains(err.Error(), "backup_id is required") {
+			t.Errorf("Expected 'backup_id is required' error, got: %v", err)
+		}
+	})
+
+	// Test 8: Restore with invalid backup_id
+	t.Run("RestoreInvalidBackupId", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":    "restore",
+			"backup_id": "nonexistent-backup-id",
+		}
+
+		_, err := toolHandler(ctx, request)
+		// Should return an error because backup doesn't exist
+		if err == nil {
+			t.Error("Expected error when trying to restore non-existent backup")
+		}
+	})
+
+	// Test 9: Clean with missing max_age_days
+	t.Run("CleanMissingMaxAge", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "clean",
+			// Missing max_age_days
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error when max_age_days is missing for clean")
+		} else if !strings.Contains(err.Error(), "max_age_days is required") {
+			t.Errorf("Expected 'max_age_days is required' error, got: %v", err)
+		}
+	})
+
+	// Test 10: Clean with valid max_age_days
+	t.Run("CleanValidParams", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action":       "clean",
+			"max_age_days": 30.0,
+		}
+
+		result, err := toolHandler(ctx, request)
+		if err != nil {
+			t.Fatalf("Unexpected error for clean with valid params: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result for clean with valid params")
+		}
+	})
+
+	// Test 11: Invalid action type
+	t.Run("InvalidAction", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]interface{}{
+			"action": "unknown_action",
+		}
+
+		_, err := toolHandler(ctx, request)
+		if err == nil {
+			t.Error("Expected error for invalid action")
+		} else if !strings.Contains(err.Error(), "invalid action") {
+			t.Errorf("Expected 'invalid action' error, got: %v", err)
+		}
+	})
+}
+
+func TestBackupHandler_CopyFile(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "backup_handler_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewBackupHandler(tempDir)
+
+	// Create source file
+	srcFile := filepath.Join(tempDir, "source.txt")
+	srcContent := "test content for copy"
+	err = os.WriteFile(srcFile, []byte(srcContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Test successful copy
+	dstFile := filepath.Join(tempDir, "destination.txt")
+	err = handler.copyFile(srcFile, dstFile)
+	if err != nil {
+		t.Errorf("Unexpected error copying file: %v", err)
+	}
+
+	// Verify destination file exists and has correct content
+	dstContent, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Errorf("Failed to read destination file: %v", err)
+	}
+	if string(dstContent) != srcContent {
+		t.Errorf("Expected content %q, got %q", srcContent, string(dstContent))
+	}
+
+	// Test copy to nonexistent directory
+	invalidDst := filepath.Join(tempDir, "nonexistent", "destination.txt")
+	err = handler.copyFile(srcFile, invalidDst)
+	if err == nil {
+		t.Error("Expected error copying to nonexistent directory")
+	}
+
+	// Test copy from nonexistent file
+	invalidSrc := filepath.Join(tempDir, "nonexistent.txt")
+	err = handler.copyFile(invalidSrc, dstFile)
+	if err == nil {
+		t.Error("Expected error copying from nonexistent file")
+	}
+}
+
+func TestBackupHandler_LoadBackupMetadata(t *testing.T) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "backup_handler_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewBackupHandler(tempDir)
+
+	// Test valid metadata file
+	validMetadata := `{
+		"id": "test-id",
+		"original_path": "/test/file.txt",
+		"backup_path": "/backups/file.txt",
+		"timestamp": "2023-01-01T12:00:00Z",
+		"change_context": "test context",
+		"reasoning": "test reasoning",
+		"file_size": 1234
+	}`
+
+	metadataFile := filepath.Join(tempDir, "backup.json")
+	err = os.WriteFile(metadataFile, []byte(validMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create metadata file: %v", err)
+	}
+
+	backup, err := handler.loadBackupMetadata(metadataFile)
+	if err != nil {
+		t.Errorf("Unexpected error loading metadata: %v", err)
+	}
+	if backup.ID != "test-id" {
+		t.Errorf("Expected ID 'test-id', got %q", backup.ID)
+	}
+	if backup.OriginalPath != "/test/file.txt" {
+		t.Errorf("Expected OriginalPath '/test/file.txt', got %q", backup.OriginalPath)
+	}
+	if backup.ChangeContext != "test context" {
+		t.Errorf("Expected ChangeContext 'test context', got %q", backup.ChangeContext)
+	}
+
+	// Test invalid JSON
+	invalidMetadata := `{invalid json`
+	invalidFile := filepath.Join(tempDir, "invalid.json")
+	err = os.WriteFile(invalidFile, []byte(invalidMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid metadata file: %v", err)
+	}
+
+	_, err = handler.loadBackupMetadata(invalidFile)
+	if err == nil {
+		t.Error("Expected error loading invalid JSON")
+	}
+
+	// Test nonexistent file
+	_, err = handler.loadBackupMetadata(filepath.Join(tempDir, "nonexistent.json"))
+	if err == nil {
+		t.Error("Expected error loading nonexistent file")
+	}
+}
+
+func TestBackupHandler_LoadErrors(t *testing.T) {
+	// Test loading corrupted metadata file
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewBackupHandler(tempDir)
+
+	// Create invalid metadata file
+	invalidMetadata := filepath.Join(tempDir, "test_metadata.json")
+	err = os.WriteFile(invalidMetadata, []byte("invalid json content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid metadata: %v", err)
+	}
+
+	// Load should fail with JSON unmarshal error
+	err = handler.Load()
+	if err == nil {
+		t.Error("Expected Load to fail with invalid JSON metadata")
+	}
+	if !strings.Contains(err.Error(), "failed to load backup metadata") {
+		t.Errorf("Expected JSON error message, got: %v", err)
+	}
+}
+
+func TestBackupHandler_CreateBackupFileNotExists(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewBackupHandler(tempDir)
+
+	// Try to backup non-existent file
+	nonExistentFile := filepath.Join(tempDir, "nonexistent.txt")
+	err = handler.CreateBackup(nonExistentFile, "test", "test")
+	if err == nil {
+		t.Error("Expected CreateBackup to fail with non-existent file")
+	}
+	if !strings.Contains(err.Error(), "cannot backup file") {
+		t.Errorf("Expected file not found error, got: %v", err)
+	}
+}
+
+func TestBackupHandler_CreateBackupCopyError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create source file
+	sourceFile := filepath.Join(tempDir, "source.txt")
+	err = os.WriteFile(sourceFile, []byte("content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Create backup directory as a file to cause permission error
+	backupDir := filepath.Join(tempDir, "backups")
+	err = os.WriteFile(backupDir, []byte("not a directory"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create backup file: %v", err)
+	}
+
+	handler := NewBackupHandler(backupDir)
+
+	// Try to create backup - should fail due to backup directory being a file
+	err = handler.CreateBackup(sourceFile, "test", "test")
+	if err == nil {
+		t.Error("Expected CreateBackup to fail with copy error")
+	}
+	if !strings.Contains(err.Error(), "failed to copy file") {
+		t.Errorf("Expected copy error, got: %v", err)
+	}
+}
+
+func TestBackupHandler_CreateBackupWithExistingGuide(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create source file
+	sourceFile := filepath.Join(tempDir, "source.txt")
+	err = os.WriteFile(sourceFile, []byte("content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	backupDir := filepath.Join(tempDir, "backups")
+	err = os.MkdirAll(backupDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create backup dir: %v", err)
+	}
+
+	// Create existing restoration guide
+	guidePath := filepath.Join(backupDir, "restoration_guide.md")
+	existingGuide := "Existing guide content"
+	err = os.WriteFile(guidePath, []byte(existingGuide), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create existing guide: %v", err)
+	}
+
+	handler := NewBackupHandler(backupDir)
+
+	// Create backup - should not overwrite existing guide
+	err = handler.CreateBackup(sourceFile, "test", "test")
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+
+	// Check that guide wasn't overwritten
+	guideContent, err := os.ReadFile(guidePath)
+	if err != nil {
+		t.Fatalf("Failed to read guide: %v", err)
+	}
+	if string(guideContent) != existingGuide {
+		t.Error("Existing restoration guide was overwritten")
+	}
+}
+
+func TestBackupHandler_RestoreBackupNonExistentBackup(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewBackupHandler(tempDir)
+
+	// Try to restore non-existent backup
+	err = handler.RestoreBackup("nonexistent-id")
+	if err == nil {
+		t.Error("Expected RestoreBackup to fail with non-existent backup")
+	}
+	if !strings.Contains(err.Error(), "backup with ID") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Expected backup not found error, got: %v", err)
+	}
+}
+
+func TestBackupHandler_RestoreBackupMissingFile(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewBackupHandler(tempDir)
+
+	// Manually add backup metadata without the actual backup file
+	backup := models.Backup{
+		ID:           "test-id",
+		OriginalPath: filepath.Join(tempDir, "original.txt"),
+		BackupPath:   filepath.Join(tempDir, "missing-backup.txt"),
+		Timestamp:    time.Now(),
+	}
+	handler.backups = []models.Backup{backup}
+
+	// Try to restore backup with missing file
+	err = handler.RestoreBackup("test-id")
+	if err == nil {
+		t.Error("Expected RestoreBackup to fail with missing backup file")
+	}
+	if !strings.Contains(err.Error(), "backup file not found") {
+		t.Errorf("Expected backup file not found error, got: %v", err)
+	}
+}
+
+func TestBackupHandler_RestoreBackupWithPreRestore(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create original file
+	originalFile := filepath.Join(tempDir, "original.txt")
+	originalContent := "current content"
+	err = os.WriteFile(originalFile, []byte(originalContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create original file: %v", err)
+	}
+
+	// Create backup file
+	backupFile := filepath.Join(tempDir, "backup.txt")
+	backupContent := "backup content"
+	err = os.WriteFile(backupFile, []byte(backupContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create backup file: %v", err)
+	}
+
+	handler := NewBackupHandler(tempDir)
+
+	// Add backup metadata
+	backup := models.Backup{
+		ID:           "test-id",
+		OriginalPath: originalFile,
+		BackupPath:   backupFile,
+		Timestamp:    time.Now(),
+	}
+	handler.backups = []models.Backup{backup}
+
+	// Restore backup - should create pre-restore backup
+	err = handler.RestoreBackup("test-id")
+	if err != nil {
+		t.Fatalf("Failed to restore backup: %v", err)
+	}
+
+	// Check original file was restored
+	restoredContent, err := os.ReadFile(originalFile)
+	if err != nil {
+		t.Fatalf("Failed to read restored file: %v", err)
+	}
+	if string(restoredContent) != backupContent {
+		t.Errorf("Expected restored content %q, got %q", backupContent, string(restoredContent))
+	}
+
+	// Check pre-restore backup was created
+	files, err := filepath.Glob(originalFile + ".pre-restore.*")
+	if err != nil {
+		t.Fatalf("Failed to search for pre-restore files: %v", err)
+	}
+	if len(files) != 1 {
+		t.Errorf("Expected 1 pre-restore file, found %d", len(files))
+	}
+}
+
+func TestBackupHandler_RestoreBackupCopyError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create backup file
+	backupFile := filepath.Join(tempDir, "backup.txt")
+	err = os.WriteFile(backupFile, []byte("backup content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create backup file: %v", err)
+	}
+
+	// Create original file in a read-only directory to cause permission error
+	originalDir := filepath.Join(tempDir, "readonly")
+	err = os.MkdirAll(originalDir, 0555) // Read-only directory
+	if err != nil {
+		t.Fatalf("Failed to create readonly directory: %v", err)
+	}
+	// Make sure to restore permissions for cleanup
+	defer os.Chmod(originalDir, 0755)
+
+	originalFile := filepath.Join(originalDir, "original.txt")
+	// We'll try to restore to this file, but the directory is read-only
+
+	handler := NewBackupHandler(tempDir)
+
+	// Add backup metadata
+	backup := models.Backup{
+		ID:           "test-id",
+		OriginalPath: originalFile,
+		BackupPath:   backupFile,
+		Timestamp:    time.Now(),
+	}
+	handler.backups = []models.Backup{backup}
+
+	// Try to restore - should fail due to permission error
+	err = handler.RestoreBackup("test-id")
+	if err == nil {
+		t.Error("Expected RestoreBackup to fail with copy error")
+	}
+	if !strings.Contains(err.Error(), "failed to restore backup") {
+		t.Errorf("Expected restore copy error, got: %v", err)
+	}
+}
+
+func TestBackupHandler_LoadWithReadError(t *testing.T) {
+	// Test Load function when directory read fails after initial check
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a metadata file with valid JSON
+	metadataContent := `{
+		"id": "test-id",
+		"original_path": "/some/path/file.txt",
+		"backup_path": "/backup/path/file.txt",
+		"timestamp": "2024-01-15T10:30:00Z",
+		"change_context": "test backup",
+		"reasoning": "testing",
+		"file_size": 1024
+	}`
+
+	metadataFile := filepath.Join(tempDir, "test_metadata.json")
+	err = os.WriteFile(metadataFile, []byte(metadataContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create metadata file: %v", err)
+	}
+
+	handler := NewBackupHandler(tempDir)
+
+	// Load should succeed and parse the metadata
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Load should succeed with valid metadata: %v", err)
+	}
+
+	backups := handler.GetBackups()
+	if len(backups) != 1 {
+		t.Errorf("Expected 1 backup, got %d", len(backups))
+	}
+
+	if backups[0].ID != "test-id" {
+		t.Errorf("Expected backup ID 'test-id', got %s", backups[0].ID)
+	}
+}
+
+func TestBackupHandler_LoadWithMixedFiles(t *testing.T) {
+	// Test Load function with mix of valid metadata, invalid files, and non-metadata files
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create valid metadata file
+	validMetadata := `{
+		"id": "valid-backup",
+		"original_path": "/path/to/original.txt",
+		"backup_path": "/path/to/backup.txt",
+		"timestamp": "2024-01-15T10:30:00Z",
+		"change_context": "valid backup",
+		"reasoning": "testing valid case",
+		"file_size": 512
+	}`
+	err = os.WriteFile(filepath.Join(tempDir, "valid_metadata.json"), []byte(validMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create valid metadata: %v", err)
+	}
+
+	// Create invalid JSON metadata file (should cause load error)
+	invalidMetadata := `{invalid json content`
+	err = os.WriteFile(filepath.Join(tempDir, "invalid_metadata.json"), []byte(invalidMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create invalid metadata: %v", err)
+	}
+
+	// Create non-metadata files (should be ignored)
+	err = os.WriteFile(filepath.Join(tempDir, "regular_file.txt"), []byte("not metadata"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create regular file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(tempDir, "backup_file.txt"), []byte("backup content"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create backup file: %v", err)
+	}
+
+	handler := NewBackupHandler(tempDir)
+
+	// Load should fail due to invalid JSON in one of the metadata files
+	err = handler.Load()
+	if err == nil {
+		t.Error("Expected Load to fail due to invalid JSON metadata")
+	}
+	if !strings.Contains(err.Error(), "failed to load backup metadata") {
+		t.Errorf("Expected metadata load error, got: %v", err)
+	}
+}
+
+func TestBackupHandler_LoadSortingByTimestamp(t *testing.T) {
+	// Test that backups are sorted by timestamp descending
+	tempDir, err := os.MkdirTemp("", "backup_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create metadata files with different timestamps
+	olderMetadata := `{
+		"id": "older-backup",
+		"original_path": "/path/to/file.txt",
+		"backup_path": "/path/to/older.txt",
+		"timestamp": "2024-01-14T10:00:00Z",
+		"change_context": "older backup",
+		"reasoning": "older",
+		"file_size": 100
+	}`
+
+	newerMetadata := `{
+		"id": "newer-backup",
+		"original_path": "/path/to/file.txt",
+		"backup_path": "/path/to/newer.txt",
+		"timestamp": "2024-01-15T15:00:00Z",
+		"change_context": "newer backup",
+		"reasoning": "newer",
+		"file_size": 200
+	}`
+
+	middleMetadata := `{
+		"id": "middle-backup",
+		"original_path": "/path/to/file.txt",
+		"backup_path": "/path/to/middle.txt",
+		"timestamp": "2024-01-15T12:00:00Z",
+		"change_context": "middle backup",
+		"reasoning": "middle",
+		"file_size": 150
+	}`
+
+	// Write files in non-chronological order
+	err = os.WriteFile(filepath.Join(tempDir, "older_metadata.json"), []byte(olderMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create older metadata: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(tempDir, "newer_metadata.json"), []byte(newerMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create newer metadata: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(tempDir, "middle_metadata.json"), []byte(middleMetadata), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create middle metadata: %v", err)
+	}
+
+	handler := NewBackupHandler(tempDir)
+
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	backups := handler.GetBackups()
+	if len(backups) != 3 {
+		t.Fatalf("Expected 3 backups, got %d", len(backups))
+	}
+
+	// Should be sorted newest first
+	if backups[0].ID != "newer-backup" {
+		t.Errorf("Expected first backup to be 'newer-backup', got %s", backups[0].ID)
+	}
+	if backups[1].ID != "middle-backup" {
+		t.Errorf("Expected second backup to be 'middle-backup', got %s", backups[1].ID)
+	}
+	if backups[2].ID != "older-backup" {
+		t.Errorf("Expected third backup to be 'older-backup', got %s", backups[2].ID)
+	}
+}
+
+func TestBackupHandler_Load_CorruptedMetadataFile(t *testing.T) {
+	tempDir := t.TempDir()
+	backupsDir := filepath.Join(tempDir, "backups")
+
+	// Create directory
+	err := os.MkdirAll(backupsDir, 0755)
+	require.NoError(t, err)
+
+	// Create a corrupted metadata file
+	corruptedFile := filepath.Join(backupsDir, "backup_123_metadata.json")
+	err = ioutil.WriteFile(corruptedFile, []byte("invalid json content {{{"), 0644)
+	require.NoError(t, err)
+
+	// Create handler and try to load
+	handler := NewBackupHandler(backupsDir)
+	err = handler.Load()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load backup metadata")
+}
+
+func TestBackupHandler_CreateBackup_JSONMarshalError(t *testing.T) {
+	tempDir := t.TempDir()
+	backupsDir := filepath.Join(tempDir, "backups")
+
+	// Create directories
+	err := os.MkdirAll(backupsDir, 0755)
+	require.NoError(t, err)
+
+	// Create a test file to backup
+	testFile := filepath.Join(tempDir, "test.go")
+	err = ioutil.WriteFile(testFile, []byte("test content"), 0644)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewBackupHandler(backupsDir)
+
+	// Save original marshal function
+	originalMarshal := backupMarshalIndentFunc
+	defer func() {
+		backupMarshalIndentFunc = originalMarshal
+	}()
+
+	// Replace with function that returns error
+	backupMarshalIndentFunc = func(v interface{}, prefix, indent string) ([]byte, error) {
+		return nil, fmt.Errorf("mock marshal error")
+	}
+
+	// Try to create backup
+	err = handler.CreateBackup(testFile, "test context", "test reasoning")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mock marshal error")
+}
+
+func TestBackupHandler_RestoreBackup_BackupFileNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	backupsDir := filepath.Join(tempDir, "backups")
+
+	// Create directory
+	err := os.MkdirAll(backupsDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewBackupHandler(backupsDir)
+
+	// Add a backup with non-existent backup file
+	backup := models.Backup{
+		ID:           "test-id",
+		OriginalPath: filepath.Join(tempDir, "test.go"),
+		BackupPath:   filepath.Join(backupsDir, "non-existent.backup"),
+		Timestamp:    time.Now(),
+	}
+	handler.backups = append(handler.backups, backup)
+
+	// Try to restore
+	err = handler.RestoreBackup("test-id")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "backup file not found")
+}
+
+func TestBackupHandler_RestoreBackup_NotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	backupsDir := filepath.Join(tempDir, "backups")
+
+	// Create directory
+	err := os.MkdirAll(backupsDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewBackupHandler(backupsDir)
+
+	// Try to restore non-existent backup
+	err = handler.RestoreBackup("non-existent-id")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "backup with ID non-existent-id not found")
+}
+
+func TestBackupHandler_GetToolHandler_CreateBackupError(t *testing.T) {
+	tempDir := t.TempDir()
+	backupsDir := filepath.Join(tempDir, "backups")
+
+	// Create directory
+	err := os.MkdirAll(backupsDir, 0755)
+	require.NoError(t, err)
+
+	// Create handler
+	handler := NewBackupHandler(backupsDir)
+	toolHandler := handler.GetToolHandler()
+
+	// Test create action with non-existent file
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"action":    "create",
+		"file_path": "/non/existent/file.go",
+		"context":   "test context",
+		"reasoning": "test reasoning",
+	}
+
+	ctx := context.Background()
+	result, err := toolHandler(ctx, request)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+}

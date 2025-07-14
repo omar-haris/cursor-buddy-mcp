@@ -1,0 +1,767 @@
+package handlers
+
+import (
+	"context"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/omar-haris/cursor-buddy-mcp/internal/models"
+	"github.com/stretchr/testify/require"
+)
+
+func TestKnowledgeHandler_Load(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "knowledge_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test knowledge file
+	knowledgeContent := `# Architecture Overview
+Category: Architecture
+Tags: microservices, api, design
+
+## System Design
+
+Our system follows a microservices architecture with the following components:
+
+1. API Gateway
+2. User Service
+3. Product Service
+`
+
+	knowledgeFile := filepath.Join(tempDir, "architecture.md")
+	err = os.WriteFile(knowledgeFile, []byte(knowledgeContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test knowledge file: %v", err)
+	}
+
+	// Test loading knowledge
+	handler := NewKnowledgeHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load knowledge: %v", err)
+	}
+
+	knowledge := handler.GetKnowledge()
+	if len(knowledge) != 1 {
+		t.Errorf("Expected 1 knowledge entry, got %d", len(knowledge))
+	}
+
+	entry := knowledge[0]
+	if entry.Title != "Architecture Overview" {
+		t.Errorf("Expected title 'Architecture Overview', got %s", entry.Title)
+	}
+
+	if entry.Category != "Architecture" {
+		t.Errorf("Expected category 'Architecture', got %s", entry.Category)
+	}
+
+	if len(entry.Tags) != 3 {
+		t.Errorf("Expected 3 tags, got %d", len(entry.Tags))
+	}
+
+	expectedTags := []string{"microservices", "api", "design"}
+	for i, tag := range expectedTags {
+		if entry.Tags[i] != tag {
+			t.Errorf("Expected tag %d to be '%s', got '%s'", i, tag, entry.Tags[i])
+		}
+	}
+}
+
+func TestKnowledgeHandler_GetKnowledgeByCategory(t *testing.T) {
+	handler := NewKnowledgeHandler("")
+
+	// Add test knowledge
+	handler.knowledge = []models.Knowledge{
+		{ID: "1", Category: "Architecture", Title: "System Design"},
+		{ID: "2", Category: "Development", Title: "Coding Standards"},
+		{ID: "3", Category: "Architecture", Title: "Database Design"},
+	}
+
+	archKnowledge := handler.GetKnowledgeByCategory("Architecture")
+	if len(archKnowledge) != 2 {
+		t.Errorf("Expected 2 architecture entries, got %d", len(archKnowledge))
+	}
+
+	devKnowledge := handler.GetKnowledgeByCategory("Development")
+	if len(devKnowledge) != 1 {
+		t.Errorf("Expected 1 development entry, got %d", len(devKnowledge))
+	}
+}
+
+func TestKnowledgeHandler_SearchKnowledge(t *testing.T) {
+	handler := NewKnowledgeHandler("")
+
+	// Add test knowledge entries
+	handler.knowledge = []models.Knowledge{
+		{
+			ID:       "1",
+			Title:    "Go Programming",
+			Category: "Programming",
+			Content:  "Go is a statically typed language",
+			Tags:     []string{"golang", "programming", "backend"},
+		},
+		{
+			ID:       "2",
+			Title:    "React Basics",
+			Category: "Frontend",
+			Content:  "React is a JavaScript library for building user interfaces",
+			Tags:     []string{"react", "javascript", "frontend"},
+		},
+		{
+			ID:       "3",
+			Title:    "Database Design",
+			Category: "Database",
+			Content:  "Principles of good database schema design",
+			Tags:     []string{"database", "sql", "design"},
+		},
+	}
+
+	// Test search by title
+	results := handler.SearchKnowledge("Go Programming")
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for title search, got %d", len(results))
+	}
+
+	// Test search by content
+	results = handler.SearchKnowledge("JavaScript")
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for content search, got %d", len(results))
+	}
+
+	// Test search by category
+	results = handler.SearchKnowledge("Frontend")
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for category search, got %d", len(results))
+	}
+
+	// Test search by tag
+	results = handler.SearchKnowledge("golang")
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for tag search, got %d", len(results))
+	}
+
+	// Test case insensitive search
+	results = handler.SearchKnowledge("REACT")
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for case insensitive search, got %d", len(results))
+	}
+
+	// Test no matches
+	results = handler.SearchKnowledge("nonexistent")
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results for nonexistent search, got %d", len(results))
+	}
+}
+
+func TestKnowledgeHandler_SearchKnowledgeComprehensive(t *testing.T) {
+	handler := NewKnowledgeHandler("")
+
+	// Add test knowledge entries with overlapping content
+	handler.knowledge = []models.Knowledge{
+		{
+			ID:       "entry1",
+			Title:    "Advanced Go Patterns",
+			Category: "Programming",
+			Content:  "Advanced programming patterns in Go including concurrency",
+			Tags:     []string{"golang", "advanced", "patterns", "concurrency"},
+		},
+		{
+			ID:       "entry2",
+			Title:    "React Hooks",
+			Category: "Frontend",
+			Content:  "Modern React development with hooks and functional components",
+			Tags:     []string{"react", "hooks", "frontend", "modern"},
+		},
+		{
+			ID:       "entry3",
+			Title:    "PostgreSQL Performance",
+			Category: "Database",
+			Content:  "Optimizing PostgreSQL for high performance applications",
+			Tags:     []string{"postgresql", "performance", "database", "optimization"},
+		},
+	}
+
+	// Test search by tag with multiple matches
+	t.Run("SearchByTag", func(t *testing.T) {
+		results := handler.SearchKnowledge("advanced")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'advanced' tag search, got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry1" {
+			t.Errorf("Expected entry1, got %s", results[0].ID)
+		}
+	})
+
+	// Test search matching multiple fields
+	t.Run("SearchMultipleMatches", func(t *testing.T) {
+		results := handler.SearchKnowledge("react")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'react', got %d", len(results))
+		}
+	})
+
+	// Test partial word matching in content
+	t.Run("PartialContentMatch", func(t *testing.T) {
+		results := handler.SearchKnowledge("concurrency")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'concurrency' content search, got %d", len(results))
+		}
+	})
+
+	// Test tag matching vs content matching priority
+	t.Run("TagMatchBreaksEarly", func(t *testing.T) {
+		// This tests the continue statement after finding a match in title/content/category
+		results := handler.SearchKnowledge("patterns")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'patterns' search, got %d", len(results))
+		}
+	})
+
+	// Test case where tag search is needed (not found in title/content/category)
+	t.Run("OnlyTagMatch", func(t *testing.T) {
+		results := handler.SearchKnowledge("optimization")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for 'optimization' tag-only search, got %d", len(results))
+		}
+		if len(results) > 0 && results[0].ID != "entry3" {
+			t.Errorf("Expected entry3, got %s", results[0].ID)
+		}
+	})
+
+	// Test empty query matches everything
+	t.Run("EmptyQuery", func(t *testing.T) {
+		results := handler.SearchKnowledge("")
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results for empty query, got %d", len(results))
+		}
+	})
+
+	// Test with entry that has no tags
+	t.Run("NoTagsEntry", func(t *testing.T) {
+		// Add entry without tags
+		handler.knowledge = append(handler.knowledge, models.Knowledge{
+			ID:       "notags",
+			Title:    "Simple Entry",
+			Category: "Basic",
+			Content:  "Entry without any tags",
+			Tags:     nil, // or []string{}
+		})
+
+		results := handler.SearchKnowledge("Simple")
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result for entry without tags, got %d", len(results))
+		}
+	})
+}
+
+func TestKnowledgeHandler_LoadWithSubdirectories(t *testing.T) {
+	// Create temporary directory structure
+	tempDir, err := os.MkdirTemp("", "knowledge_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create subdirectory
+	subDir := filepath.Join(tempDir, "architecture")
+	err = os.MkdirAll(subDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create subdirectory: %v", err)
+	}
+
+	// Create knowledge files in subdirectory
+	content1 := `# Microservices
+Category: Architecture
+
+Microservices design patterns.`
+
+	content2 := `# Database Design
+Category: Architecture
+
+Database normalization and indexing.`
+
+	file1 := filepath.Join(subDir, "microservices.md")
+	file2 := filepath.Join(subDir, "database.md")
+
+	err = os.WriteFile(file1, []byte(content1), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create first knowledge file: %v", err)
+	}
+
+	err = os.WriteFile(file2, []byte(content2), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create second knowledge file: %v", err)
+	}
+
+	// Test loading from subdirectories
+	handler := NewKnowledgeHandler(tempDir)
+	err = handler.Load()
+	if err != nil {
+		t.Fatalf("Failed to load knowledge: %v", err)
+	}
+
+	knowledge := handler.GetKnowledge()
+	if len(knowledge) != 2 {
+		t.Errorf("Expected 2 knowledge entries, got %d", len(knowledge))
+	}
+
+	// Check that both files were loaded
+	titles := make(map[string]bool)
+	for _, entry := range knowledge {
+		titles[entry.Title] = true
+	}
+
+	if !titles["Microservices"] {
+		t.Error("Expected 'Microservices' title to be loaded")
+	}
+
+	if !titles["Database Design"] {
+		t.Error("Expected 'Database Design' title to be loaded")
+	}
+}
+
+func TestKnowledgeHandler_GetToolHandler(t *testing.T) {
+	handler := NewKnowledgeHandler("")
+
+	// Add test knowledge
+	handler.knowledge = []models.Knowledge{
+		{ID: "1", Title: "Test Knowledge", Category: "Architecture"},
+	}
+
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected tool handler, got nil")
+	}
+}
+
+func TestKnowledgeHandler_GetToolHandlerComprehensive(t *testing.T) {
+	// Create a temporary directory
+	tempDir, err := os.MkdirTemp("", "knowledge_tool_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a handler with test data
+	handler := &KnowledgeHandler{
+		path: tempDir,
+		knowledge: []models.Knowledge{
+			{
+				ID:       "test-knowledge-1",
+				Title:    "Database Schema",
+				Category: "database",
+				Content:  "The database uses PostgreSQL with the following tables...",
+				Tags:     []string{"database", "schema", "postgres"},
+			},
+			{
+				ID:       "test-knowledge-2",
+				Title:    "Authentication Flow",
+				Category: "security",
+				Content:  "The authentication system uses JWT tokens...",
+				Tags:     []string{"auth", "security", "jwt"},
+			},
+		},
+	}
+
+	// Get the tool handler
+	toolHandler := handler.GetToolHandler()
+	if toolHandler == nil {
+		t.Fatal("Expected non-nil tool handler")
+	}
+
+	// Create test context
+	ctx := context.Background()
+
+	// Test with no arguments (should return all knowledge items)
+	baseRequest := mcp.CallToolRequest{}
+	baseRequest.Params.Arguments = map[string]interface{}{
+		"query": "", // Add an empty query to satisfy the requirement
+	}
+
+	baseResult, err := toolHandler(ctx, baseRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for base request: %v", err)
+	}
+	if baseResult == nil {
+		t.Fatal("Expected non-nil result for base request")
+	}
+
+	// Test with query parameter
+	queryRequest := mcp.CallToolRequest{}
+	queryRequest.Params.Arguments = map[string]interface{}{
+		"query": "database",
+	}
+
+	queryResult, err := toolHandler(ctx, queryRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for query request: %v", err)
+	}
+	if queryResult == nil {
+		t.Fatal("Expected non-nil result for query request")
+	}
+
+	// Test with category parameter
+	categoryRequest := mcp.CallToolRequest{}
+	categoryRequest.Params.Arguments = map[string]interface{}{
+		"category": "security",
+		"query":    "", // Add an empty query to satisfy the requirement
+	}
+
+	categoryResult, err := toolHandler(ctx, categoryRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for category request: %v", err)
+	}
+	if categoryResult == nil {
+		t.Fatal("Expected non-nil result for category request")
+	}
+
+	// Test with both query and category parameters
+	combinedRequest := mcp.CallToolRequest{}
+	combinedRequest.Params.Arguments = map[string]interface{}{
+		"query":    "token",
+		"category": "security",
+	}
+
+	combinedResult, err := toolHandler(ctx, combinedRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for combined request: %v", err)
+	}
+	if combinedResult == nil {
+		t.Fatal("Expected non-nil result for combined request")
+	}
+
+	// Test with non-existent category
+	nonExistentRequest := mcp.CallToolRequest{}
+	nonExistentRequest.Params.Arguments = map[string]interface{}{
+		"category": "non_existent",
+		"query":    "", // Add an empty query to satisfy the requirement
+	}
+
+	nonExistentResult, err := toolHandler(ctx, nonExistentRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for non-existent category: %v", err)
+	}
+	if nonExistentResult == nil {
+		t.Fatal("Expected non-nil result for non-existent category")
+	}
+
+	// Test with empty knowledge collection
+	emptyHandler := &KnowledgeHandler{
+		path:      tempDir,
+		knowledge: []models.Knowledge{},
+	}
+
+	emptyToolHandler := emptyHandler.GetToolHandler()
+	emptyRequest := mcp.CallToolRequest{}
+	emptyRequest.Params.Arguments = map[string]interface{}{
+		"query": "", // Add an empty query to satisfy the requirement
+	}
+
+	emptyResult, err := emptyToolHandler(ctx, emptyRequest)
+	if err != nil {
+		t.Fatalf("Tool handler returned error for empty knowledge: %v", err)
+	}
+	if emptyResult == nil {
+		t.Fatal("Expected non-nil result for empty knowledge")
+	}
+}
+
+func TestKnowledgeHandler_LoadKnowledgeFileComprehensive(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "knowledge_load_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	handler := NewKnowledgeHandler(tempDir)
+
+	// Test 1: Complete knowledge file with all metadata
+	t.Run("CompleteKnowledgeFile", func(t *testing.T) {
+		content := `# Advanced Go Programming
+Category: Programming
+Tags: golang, advanced, concurrency
+
+This is a comprehensive guide to advanced Go programming concepts.
+It covers goroutines, channels, and other concurrency patterns.
+
+## Section 1
+Content continues here...`
+
+		testFile := filepath.Join(tempDir, "advanced-go.md")
+		err := os.WriteFile(testFile, []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		knowledge, err := handler.loadKnowledgeFile(testFile)
+		if err != nil {
+			t.Fatalf("loadKnowledgeFile should succeed: %v", err)
+		}
+
+		if knowledge.Title != "Advanced Go Programming" {
+			t.Errorf("Expected title 'Advanced Go Programming', got %s", knowledge.Title)
+		}
+		if knowledge.Category != "Programming" {
+			t.Errorf("Expected category 'Programming', got %s", knowledge.Category)
+		}
+		if len(knowledge.Tags) != 3 {
+			t.Errorf("Expected 3 tags, got %d", len(knowledge.Tags))
+		}
+		if !strings.Contains(knowledge.Content, "comprehensive guide") {
+			t.Errorf("Content should contain 'comprehensive guide'")
+		}
+	})
+
+	// Test 2: Knowledge file without explicit category (inferred from path)
+	t.Run("CategoryFromPath", func(t *testing.T) {
+		categoryDir := filepath.Join(tempDir, "frontend")
+		os.MkdirAll(categoryDir, 0755)
+
+		content := `# React Components
+Tags: react, components
+
+Building reusable React components.`
+
+		testFile := filepath.Join(categoryDir, "react-components.md")
+		err := os.WriteFile(testFile, []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		knowledge, err := handler.loadKnowledgeFile(testFile)
+		if err != nil {
+			t.Fatalf("loadKnowledgeFile should succeed: %v", err)
+		}
+
+		if knowledge.Category != "frontend" {
+			t.Errorf("Expected category inferred as 'frontend', got %s", knowledge.Category)
+		}
+	})
+
+	// Test 3: Knowledge file with minimal metadata
+	t.Run("MinimalMetadata", func(t *testing.T) {
+		content := `# Basic Title
+
+Just content without much metadata.`
+
+		testFile := filepath.Join(tempDir, "basic.md")
+		err := os.WriteFile(testFile, []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		knowledge, err := handler.loadKnowledgeFile(testFile)
+		if err != nil {
+			t.Fatalf("loadKnowledgeFile should succeed: %v", err)
+		}
+
+		if knowledge.Title != "Basic Title" {
+			t.Errorf("Expected title 'Basic Title', got %s", knowledge.Title)
+		}
+		if knowledge.Category != "" {
+			t.Errorf("Expected empty category, got %s", knowledge.Category)
+		}
+		if len(knowledge.Tags) != 0 {
+			t.Errorf("Expected 0 tags, got %d", len(knowledge.Tags))
+		}
+	})
+
+	// Test 4: Knowledge file without title
+	t.Run("NoTitle", func(t *testing.T) {
+		content := `Category: Misc
+Tags: misc
+
+Content without a title.`
+
+		testFile := filepath.Join(tempDir, "notitle.md")
+		err := os.WriteFile(testFile, []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		knowledge, err := handler.loadKnowledgeFile(testFile)
+		if err != nil {
+			t.Fatalf("loadKnowledgeFile should succeed: %v", err)
+		}
+
+		if knowledge.Title != "" {
+			t.Errorf("Expected empty title, got %s", knowledge.Title)
+		}
+		if knowledge.Category != "Misc" {
+			t.Errorf("Expected category 'Misc', got %s", knowledge.Category)
+		}
+	})
+
+	// Test 5: Error case - non-existent file
+	t.Run("NonExistentFile", func(t *testing.T) {
+		_, err := handler.loadKnowledgeFile("/nonexistent/file.md")
+		if err == nil {
+			t.Error("Expected error for non-existent file")
+		}
+	})
+
+	// Test 6: File with complex structure
+	t.Run("ComplexStructure", func(t *testing.T) {
+		content := `# Docker Best Practices
+Category: DevOps
+Tags: docker, containerization, best-practices
+
+Docker is a containerization platform.
+
+## Basic Commands
+docker build
+docker run
+
+## Advanced Usage
+Multi-stage builds and optimization.`
+
+		testFile := filepath.Join(tempDir, "docker.md")
+		err := os.WriteFile(testFile, []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		knowledge, err := handler.loadKnowledgeFile(testFile)
+		if err != nil {
+			t.Fatalf("loadKnowledgeFile should succeed: %v", err)
+		}
+
+		// Check that content includes everything after the metadata
+		if !strings.Contains(knowledge.Content, "Docker is a containerization") {
+			t.Error("Content should include main description")
+		}
+		if !strings.Contains(knowledge.Content, "Multi-stage builds") {
+			t.Error("Content should include all sections")
+		}
+	})
+
+	// Test 7: Empty file
+	t.Run("EmptyFile", func(t *testing.T) {
+		testFile := filepath.Join(tempDir, "empty.md")
+		err := os.WriteFile(testFile, []byte(""), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create empty test file: %v", err)
+		}
+
+		knowledge, err := handler.loadKnowledgeFile(testFile)
+		if err != nil {
+			t.Fatalf("loadKnowledgeFile should handle empty file: %v", err)
+		}
+
+		if knowledge.Title != "" || knowledge.Content != "" {
+			t.Error("Empty file should result in empty title and content")
+		}
+	})
+}
+
+func TestKnowledgeHandler_ConcurrentAccess(t *testing.T) {
+	handler := NewKnowledgeHandler("")
+
+	// Add test knowledge
+	handler.knowledge = []models.Knowledge{
+		{ID: "1", Title: "Test Knowledge", Category: "Architecture"},
+	}
+
+	// Test concurrent read access
+	done := make(chan bool, 2)
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			knowledge := handler.GetKnowledge()
+			if len(knowledge) != 1 {
+				t.Errorf("Concurrent read failed: expected 1 entry, got %d", len(knowledge))
+			}
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			results := handler.SearchKnowledge("Test")
+			if len(results) != 1 {
+				t.Errorf("Concurrent search failed: expected 1 result, got %d", len(results))
+			}
+		}
+		done <- true
+	}()
+
+	// Wait for both goroutines to complete
+	<-done
+	<-done
+}
+
+func TestKnowledgeHandler_GetToolHandler_SearchWithCategory(t *testing.T) {
+	tempDir := t.TempDir()
+	knowledgeDir := filepath.Join(tempDir, "knowledge")
+
+	// Create directory
+	err := os.MkdirAll(knowledgeDir, 0755)
+	require.NoError(t, err)
+
+	// Create test knowledge files in different categories
+	testFiles := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "api-design.md",
+			content: `# API Design Best Practices
+- category: architecture
+- tags: api, rest, design
+
+REST API design guidelines and best practices.`,
+		},
+		{
+			name: "testing.md",
+			content: `# Testing Strategy
+- category: development
+- tags: testing, quality
+
+Comprehensive testing approach and guidelines.`,
+		},
+		{
+			name: "security.md",
+			content: `# Security Guidelines
+- category: architecture
+- tags: security, api
+
+API security best practices and guidelines.`,
+		},
+	}
+
+	for _, tf := range testFiles {
+		filePath := filepath.Join(knowledgeDir, tf.name)
+		err = ioutil.WriteFile(filePath, []byte(tf.content), 0644)
+		require.NoError(t, err)
+	}
+
+	// Create handler
+	handler := NewKnowledgeHandler(knowledgeDir)
+	err = handler.Load()
+	require.NoError(t, err)
+
+	toolHandler := handler.GetToolHandler()
+
+	// Test search with category filter
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]interface{}{
+		"query":    "api",
+		"category": "architecture",
+	}
+
+	ctx := context.Background()
+	result, err := toolHandler(ctx, request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Just verify the result is not nil and no error
+	// The actual content verification would require parsing the result structure
+	// which varies by MCP implementation
+}

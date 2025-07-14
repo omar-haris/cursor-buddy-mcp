@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  buddy-mcp:
+    build: .
+    environment:
+      - BUDDY_PATH=/home/buddy/.buddy
+    volumes:
+      - ./.buddy:/home/buddy/.buddy
+    stdin_open: true
+    tty: true 
