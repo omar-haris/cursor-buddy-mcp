@@ -13,8 +13,9 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
-# Copy source code
-COPY . .
+# Copy only the necessary directories and files
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 
 # Build the application
 RUN go build -o /app/buddy-mcp ./cmd/buddy-mcp
