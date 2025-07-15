@@ -124,6 +124,8 @@ docker pull ghcr.io/omar-haris/cursor-buddy-mcp:latest
 
 Add to `.cursor/mcp.json`:
 
+> **⚠️ Important**: Replace `/path/to/your/project/` with your actual project directory path!
+
 ```json
 {
   "mcpServers": {
@@ -140,10 +142,36 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
+**Examples:**
+- Linux/macOS: `"/home/user/myproject/.buddy:/home/buddy/.buddy"`
+- Windows: `"C:/Users/User/myproject/.buddy:/home/buddy/.buddy"`
+- Current directory: `"${PWD}/.buddy:/home/buddy/.buddy"`
+
+**💡 How to find your project path:**
+```bash
+# Navigate to your project directory and run:
+pwd
+# Copy the output and replace /path/to/your/project/ with: {output}/.buddy
+```
+
 ### 3️⃣ Create .buddy Structure
+
+Navigate to your project directory and run:
 
 ```bash
 mkdir -p .buddy/{rules,knowledge,todos,database,history,backups}
+```
+
+**📁 This will create:**
+```
+your-project/
+├── .buddy/
+│   ├── rules/
+│   ├── knowledge/
+│   ├── todos/
+│   ├── database/
+│   ├── history/
+│   └── backups/
 ```
 
 ### 4️⃣ Add Your Content
